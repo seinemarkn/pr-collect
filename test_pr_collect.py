@@ -123,6 +123,12 @@ def fixture_shell(root: Path) -> FakeShell:
     sh.on([*api, "repos/example/widgets/pulls/42/reviews"], fx("gh", "reviews.json"))
     sh.on([*api, "repos/example/widgets/issues/42/timeline"], fx("gh", "timeline.json"))
     sh.on(graphql_argv(), fx("gh", "review-threads.json"))
+    mb, head, base = SHAS["merge_base"], SHAS["head"], SHAS["base"]
+    sh.on(["git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/42/head:refs/remotes/origin/pr/42"], "")
+    sh.on(["git", "rev-parse", "refs/remotes/origin/pr/42"], head + "\n")
+    sh.on(["git", "rev-parse", "refs/remotes/origin/main"], base + "\n")
+    sh.on(["git", "merge-base", base, head], mb + "\n")
+    sh.on(["git", "log", "--reverse", f"--format={pc.LOG_FORMAT}", "--numstat", "-M", f"{mb}..{head}"], fx("git", "log.txt"))
     return sh
 
 
@@ -751,7 +757,7 @@ class TestConversation(unittest.TestCase):
         sh = fixture_shell(self.root).on(graphql_argv(), "", "GraphQL: something", 1)
         term, ctx, text = self.collected(sh)
         self.assertIn("the review threads (gh api graphql): GraphQL: something", ctx.missing[0])
-        self.assertIn("0 review threads (0 unresolved)", term.said[-3])
+        self.assertTrue(any("0 review threads (0 unresolved)" in line for line in term.said), term.said)
 
     def test_conversation_is_in_time_order_and_complete(self):
         term, ctx, text = self.collected()
@@ -821,6 +827,70 @@ class TestConversation(unittest.TestCase):
         self.assertEqual(pc.review_verdict(None), "reviewed")
         self.assertEqual(pc.quoted(""), "> (empty)")
         self.assertEqual(pc.quoted("a\n\nb\n"), "> a\n>\n> b")
+
+
+class TestRefsAndCommits(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fetch_failure_stops(self):
+        sh = fixture_shell(self.root).on(["git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main", "+refs/pull/42/head:refs/remotes/origin/pr/42"], "", "fatal: could not read from remote", 128)
+        code, term, _ = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 1)
+        self.assertIn("git fetch failed while fetching the base branch", term.warned[0])
+        self.assertIn("could not read from remote", term.warned[0])
+
+    def test_head_that_moved_stops(self):
+        sh = fixture_shell(self.root).on(["git", "rev-parse", "refs/remotes/origin/pr/42"], "0123456789abcdef0123456789abcdef01234567\n")
+        code, term, _ = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 1)
+        self.assertIn("is not the head GitHub reports", term.warned[0])
+
+    def test_shas_land_in_the_header(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn(f"**Head:** {SHAS['head']} · **Base:** {SHAS['base']} · **Merge base:** {SHAS['merge_base']}", text)
+        self.assertIn(f"main at {SHAS['base'][:10]}", text)
+        self.assertTrue(any(line.startswith("refs                head") for line in term.said), term.said)
+
+    def test_parse_log_and_numstat(self):
+        commits = pc.parse_log(fx("git", "log.txt"))
+        self.assertEqual([c.sha for c in commits], SHAS["commits"])
+        first, second, third = commits
+        self.assertEqual((first.author, first.email, first.date), ("Octo Developer", "octo-dev@example.com", "2026-03-02T09:00:00Z"))
+        self.assertEqual(first.message.split("\n")[0], "Add filter_widgets and Catalog.filtered")
+        self.assertIn("so it can be reused.", first.message)
+        self.assertEqual([(f.path, f.added, f.removed) for f in first.files], [("lib/widgets/catalog.py", 9, 0), ("lib/widgets/filter.py", 15, 0)])
+        self.assertEqual(second.message, "Test the filter and the colour list")
+        self.assertEqual([(f.path, f.added, f.removed) for f in second.files], [("tests/test_catalog.py", 9, 0)])
+        self.assertEqual([(f.path, f.added, f.removed) for f in third.files], [("docs/diagram.png", None, None), ("docs/filtering.md", 8, 0)])
+        self.assertEqual(pc.parse_log(""), [])
+        self.assertEqual(pc.parse_numstat("junk line\n"), [])
+
+    def test_numstat_paths(self):
+        self.assertEqual(pc.numstat_path("docs/{usage.md => filtering.md}"), "docs/filtering.md")
+        self.assertEqual(pc.numstat_path("{old => new}/file.py"), "new/file.py")
+        self.assertEqual(pc.numstat_path("a.py => b.py"), "b.py")
+        self.assertEqual(pc.numstat_path("plain.py"), "plain.py")
+
+    def test_render_commits(self):
+        repo = pc.Repo("github.com", "example", "widgets", self.root)
+        c = pc.Collected(repo, "b", pc.Ticket(1), 42, {}, FIXED_TIME)
+        self.assertEqual(pc.render_commits(c), "No commits between the merge base and the head.\n")
+        c.commits = pc.parse_log(fx("git", "log.txt"))
+        text = pc.render_commits(c)
+        self.assertIn(f"## 1. {SHAS['commits'][0][:10]} · Octo Developer <octo-dev@example.com> · 2026-03-02T09:00:00Z", text)
+        self.assertIn(f"Full sha: {SHAS['commits'][0]}", text)
+        self.assertIn("The catalog can now be narrowed by colour or by a smallest size.", text)
+        self.assertIn("Files: lib/widgets/catalog.py (+9 -0), lib/widgets/filter.py (+15 -0)", text)
+        self.assertIn("Files: docs/diagram.png (binary), docs/filtering.md (+8 -0)", text)
+        c.commits[0].files = []
+        self.assertIn("Files: none", pc.render_commits(c))
 
 
 if __name__ == "__main__":

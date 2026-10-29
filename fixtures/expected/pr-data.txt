@@ -3,10 +3,10 @@
 - **Ticket:** DEMO-123 (number 123), from the branch name, as the key DEMO-123
 - **Pull request:** #42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42) on example/widgets (github.com)
 - **Branch:** DEMO-123-add-widget-filter into main
-- **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** ? · **Merge base:** ?
+- **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** 5971d32b31e861e454e64b13bcebc308cfff6c9a · **Merge base:** 8c25148139b155302e64998def3fc5cf6fdc80cf
 - **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
-- **Counts:** 9 comments, 5 review threads (3 unresolved)
-- **Sections:** 1. Header · 2. Pull request · 3. Conversation
+- **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits
+- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits
 - **Requests to GitHub:** 9
 
 # pr-data: Pull request
@@ -14,7 +14,7 @@
 - **Number:** #42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42)
 - **Author:** Octo Developer (@octo-dev)
 - **State:** open
-- **Base:** main at ? · **Head:** DEMO-123-add-widget-filter at 22abb9a877 · **Merge base:** ?
+- **Base:** main at 5971d32b31 · **Head:** DEMO-123-add-widget-filter at 22abb9a877 · **Merge base:** 8c25148139
 - **Size:** 5 files, +55 -0
 - **Labels:** enhancement, needs review
 - **Assignees:** @octo-dev
@@ -143,3 +143,32 @@ The description is in the Pull request section.
 ## 2026-03-04T16:09:00Z · @octo-dev changed the base branch
 
 ## 2026-03-04T16:10:00Z · @octo-dev: some_new_event
+
+# pr-data: Commits
+
+## 1. a72c8862aa · Octo Developer <octo-dev@example.com> · 2026-03-02T09:00:00Z
+
+Full sha: a72c8862aa73edbeaedbf5f35fb2b283c6ec6c9b
+
+Add filter_widgets and Catalog.filtered
+
+The catalog can now be narrowed by colour or by a smallest size.
+The filter lives in its own module so it can be reused.
+
+Files: lib/widgets/catalog.py (+9 -0), lib/widgets/filter.py (+15 -0)
+
+## 2. f664004109 · Octo Developer <octo-dev@example.com> · 2026-03-02T11:30:00Z
+
+Full sha: f66400410996cbed33edd573a0ca529a32e9054d
+
+Test the filter and the colour list
+
+Files: tests/test_catalog.py (+9 -0)
+
+## 3. 22abb9a877 · Octo Developer <octo-dev@example.com> · 2026-03-04T15:00:00Z
+
+Full sha: 22abb9a877c8810578042c25ccf0b591950f23f8
+
+Document filtering; rename the usage page
+
+Files: docs/diagram.png (binary), docs/filtering.md (+8 -0)

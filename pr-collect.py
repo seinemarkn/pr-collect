@@ -415,6 +415,7 @@ class Collected:
     reviews: list = field(default_factory=list)
     events: list = field(default_factory=list)
     threads: list = field(default_factory=list)
+    commits: list = field(default_factory=list)
 
 
 @dataclass
@@ -769,6 +770,124 @@ def render_conversation(c: Collected) -> str:
     return "\n".join(i[2] for i in items)
 
 
+# ---------------------------------------------------------------------------
+# git: the remote refs, the shas, and the commits.
+# ---------------------------------------------------------------------------
+
+
+def git_run(ctx: Context, args: list[str], *, what: str) -> str:
+    r = ctx.shell.run(["git", *args])
+    if not r.ok:
+        raise CollectError(f"git {args[0]} failed while {what}: {r.stderr.strip() or 'no output'}")
+    return r.stdout
+
+
+def fetch_refs(ctx: Context, c: Collected) -> None:
+    """Fetch the base branch and the pull request's head from the remote, so neither side
+    depends on a local checkout; the head must be the sha GitHub reports."""
+    base_branch = c.pr.get("baseRefName") or "main"
+    base_ref = f"refs/remotes/origin/{base_branch}"
+    head_ref = f"refs/remotes/origin/pr/{c.number}"
+    git_run(ctx, ["fetch", "-q", "origin", f"+refs/heads/{base_branch}:{base_ref}", f"+refs/pull/{c.number}/head:{head_ref}"],
+            what="fetching the base branch and the pull request's head")
+    c.head_sha = git_run(ctx, ["rev-parse", head_ref], what="reading the head").strip()
+    c.base_sha = git_run(ctx, ["rev-parse", base_ref], what="reading the base").strip()
+    expected = c.pr.get("headRefOid")
+    if expected and c.head_sha != expected:
+        raise CollectError(
+            f"the fetched head {short(c.head_sha)} is not the head GitHub reports for #{c.number}, "
+            f"{short(expected)}. The pull request moved during the run, or the fetch did not reach it; run again."
+        )
+    c.merge_base = git_run(ctx, ["merge-base", c.base_sha, c.head_sha], what="finding the merge base").strip()
+    ctx.terminal.say(f"refs                head {short(c.head_sha)}, base {short(c.base_sha)}, merge base {short(c.merge_base)}")
+
+
+@dataclass
+class FileStat:
+    path: str
+    added: int | None  # None for a binary file
+    removed: int | None
+
+
+@dataclass
+class Commit:
+    sha: str
+    author: str
+    email: str
+    date: str
+    message: str
+    files: list[FileStat]
+
+
+RENAME_BRACES_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
+
+
+def numstat_path(raw: str) -> str:
+    """The new path from a --numstat path, which git writes as `{old => new}` for a rename."""
+    m = RENAME_BRACES_RE.match(raw)
+    if m:
+        return f"{m.group(1)}{m.group(3)}{m.group(4)}"
+    if " => " in raw:
+        return raw.split(" => ", 1)[1]
+    return raw
+
+
+def parse_numstat(text: str) -> list[FileStat]:
+    stats = []
+    for line in text.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        added, removed, raw = parts
+        stats.append(FileStat(numstat_path(raw), None if added == "-" else int(added), None if removed == "-" else int(removed)))
+    return stats
+
+
+LOG_FORMAT = "%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%B"
+
+
+def parse_log(text: str) -> list[Commit]:
+    commits = []
+    for record in text.split("\x1e"):
+        if not record.strip():
+            continue
+        sha, author, email, date, rest = record.split("\x1f", 4)
+        # %B ends with a newline, then a blank line, then the numstat lines.
+        message, _, numstat = rest.partition("\n\n\n")
+        commits.append(Commit(sha, author, email, date, message.strip("\n"), parse_numstat(numstat)))
+    return commits
+
+
+def fetch_commits(ctx: Context, c: Collected) -> None:
+    out = git_run(ctx, ["log", "--reverse", f"--format={LOG_FORMAT}", "--numstat", "-M", f"{c.merge_base}..{c.head_sha}"],
+                  what="listing the commits")
+    c.commits = parse_log(out)
+    c.counts["commits"] = len(c.commits)
+    ctx.terminal.say(f"commits             {len(c.commits)}")
+
+
+def stat_label(f: FileStat) -> str:
+    if f.added is None:
+        return f"{f.path} (binary)"
+    return f"{f.path} (+{f.added} -{f.removed})"
+
+
+def render_commits(c: Collected) -> str:
+    if not c.commits:
+        return "No commits between the merge base and the head.\n"
+    out = []
+    for i, cm in enumerate(c.commits, 1):
+        out.append(f"## {i}. {short(cm.sha)} · {cm.author} <{cm.email}> · {cm.date}")
+        out.append("")
+        out.append(f"Full sha: {cm.sha}")
+        out.append("")
+        out.append(cm.message)
+        out.append("")
+        out.append("Files: " + (", ".join(stat_label(f) for f in cm.files) or "none"))
+        out.append("")
+    return "\n".join(out)
+
+
 # ==== cli ====
 
 
@@ -818,10 +937,13 @@ def collect(ctx: Context) -> Path:
     me = gh_json(ctx, ["api", "user"], optional=True)
     c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
     ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")
+    fetch_refs(ctx, c)
     fetch_conversation(ctx, c)
+    fetch_commits(ctx, c)
     sections = [
         Section("Pull request", render_pull_request(c)),
         Section("Conversation", render_conversation(c)),
+        Section("Commits", render_commits(c)),
     ]
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]
