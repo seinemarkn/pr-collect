@@ -110,6 +110,7 @@ class Options:
     no_files: bool = False
     full_logs: bool = False
     related: bool = False
+    redact: list[str] = field(default_factory=list)
 
 
 def utc_now() -> datetime:
@@ -431,6 +432,7 @@ class Collected:
     files: list = field(default_factory=list)
     head_files: dict = field(default_factory=dict)
     base_files: dict = field(default_factory=dict)
+    related_files: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1451,6 +1453,103 @@ def split_sections(text: str) -> list[tuple[str, str]]:
     return sections
 
 
+# ---------------------------------------------------------------------------
+# Proposed extras: related files (--related) and a redaction list (--redact).
+# ---------------------------------------------------------------------------
+
+RELATED_CAP = 25
+DEFINITION_RES = [
+    re.compile(r"^\s*(?:def|class|module|function|interface|struct|enum|type)\s+([A-Za-z_][A-Za-z0-9_]{2,})"),
+    re.compile(r"^\s*(?:const|let|var|val)\s+([A-Za-z_][A-Za-z0-9_]{2,})"),
+    re.compile(r"^\s*([A-Z][A-Z0-9_]{2,})\s*="),
+]
+
+
+def identifiers_added(patch: str) -> list[str]:
+    """Names the diff defines on its added lines: methods, classes, constants."""
+    found: dict[str, None] = {}
+    for df in parse_diff(patch):
+        for h in df.hunks:
+            for line in h.lines:
+                if line.kind != "added":
+                    continue
+                for rx in DEFINITION_RES:
+                    m = rx.match(line.text)
+                    if m:
+                        found.setdefault(m.group(1), None)
+    return list(found)
+
+
+def fetch_related(ctx: Context, c: Collected) -> None:
+    names = identifiers_added(c.patch)
+    if not names:
+        ctx.notes.append("Related files (--related): the diff defines no identifier to look for.")
+        return
+    args = ["grep", "-l", "-w", "-I"]
+    for n in names:
+        args += ["-e", n]
+    r = ctx.shell.run(["git", *args, c.head_sha])
+    if r.code not in (0, 1):
+        ctx.missing.append(f"related files (git grep): {r.stderr.strip() or 'failed'}")
+        return
+    paths = []
+    for line in r.stdout.splitlines():
+        path = line.split(":", 1)[1] if ":" in line else line
+        if path and path not in c.head_files and path not in paths:
+            paths.append(path)
+    chosen = paths[:RELATED_CAP]
+    for path in chosen:
+        c.related_files[path] = file_at(ctx, c.head_sha, path)
+    note = f"Related files (--related): {len(names)} identifiers ({', '.join(names)}); {len(paths)} files name one of them"
+    if len(paths) > RELATED_CAP:
+        note += f", the first {RELATED_CAP} included"
+    ctx.notes.append(note + ".")
+    ctx.terminal.say(f"related             {len(chosen)} files at the head")
+
+
+GUTTER_RE = re.compile(r"^(\s*\d*\s+\d*\s[ +-] )")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def redact_text(text: str, patterns: list[re.Pattern]) -> tuple[str, int]:
+    """Replace every match with [REDACTED], leaving gutter numbers and shas alone."""
+    count = 0
+    out = []
+    for line in text.split("\n"):
+        prefix = ""
+        m = GUTTER_RE.match(line)
+        if m:
+            prefix, line = m.group(1), line[m.end():]
+        shas = {s.group(0) for s in SHA_RE.finditer(line)}
+        for rx in patterns:
+            def swap(match: re.Match) -> str:
+                nonlocal count
+                if any(match.group(0) in s for s in shas):
+                    return match.group(0)
+                count += 1
+                return "[REDACTED]"
+            line = rx.sub(swap, line)
+        out.append(prefix + line)
+    return "\n".join(out), count
+
+
+def apply_redactions(ctx: Context, sections: list[Section]) -> None:
+    patterns = []
+    for raw in ctx.options.redact:
+        try:
+            patterns.append(re.compile(raw))
+        except re.error as err:
+            raise CollectError(f"--redact {raw!r} is not a valid pattern: {err}") from None
+    if not patterns:
+        return
+    counts = []
+    for sec in sections:
+        sec.body, n = redact_text(sec.body, patterns)
+        if n:
+            counts.append(f"{sec.name} {n}")
+    ctx.notes.append("Redactions (--redact): " + (", ".join(counts) if counts else "nothing matched") + ".")
+
+
 # ==== cli ====
 
 
@@ -1478,11 +1577,13 @@ def parse_args(argv: list[str] | None = None) -> Options:
     parser.add_argument("--no-files", action="store_true", help="leave out the whole touched files at the head and at the base")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
     parser.add_argument("--related", action="store_true", help="add files at the head that name an identifier the diff adds or changes")
+    parser.add_argument("--redact", action="append", default=[], metavar="PATTERN",
+                        help="a regular expression to replace with [REDACTED] everywhere but the header; may be repeated")
     parser.add_argument("--version", action="version", version=f"pr-collect {__version__}")
     ns = parser.parse_args(argv)
     return Options(
         number=ns.number, ticket=ns.ticket, yes=ns.yes,
-        no_files=ns.no_files, full_logs=ns.full_logs, related=ns.related,
+        no_files=ns.no_files, full_logs=ns.full_logs, related=ns.related, redact=list(ns.redact),
     )
 
 
@@ -1514,6 +1615,8 @@ def collect(ctx: Context) -> Path:
         ctx.notes.append("The touched files were left out (--no-files).")
     else:
         fetch_files(ctx, c)
+    if ctx.options.related:
+        fetch_related(ctx, c)
     sections = [
         Section("Pull request", render_pull_request(c)),
         Section("Conversation", render_conversation(c)),
@@ -1525,6 +1628,9 @@ def collect(ctx: Context) -> Path:
     if not ctx.options.no_files:
         sections.append(Section("Files at head", render_files(c.head_files, c.head_sha, "at the head")))
         sections.append(Section("Files at base", render_files(c.base_files, c.merge_base, "at the base (the merge base)")))
+    if c.related_files:
+        sections.append(Section("Related files", render_files(c.related_files, c.head_sha, "related to the change, at the head")))
+    apply_redactions(ctx, sections)
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]
     sections.insert(0, Section("Header", render_header(ctx, c, names)))

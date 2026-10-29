@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -239,10 +240,11 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(opts, pc.Options())
 
     def test_every_flag(self):
-        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--related"])
+        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--related", "--redact", "A", "--redact", "B"])
         self.assertEqual(opts.number, 42)
         self.assertEqual(opts.ticket, "123")
         self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.related)
+        self.assertEqual(opts.redact, ["A", "B"])
 
     def test_version_and_help_exit(self):
         for flag in ("--version", "--help"):
@@ -256,7 +258,7 @@ class TestParseArgs(unittest.TestCase):
             with self.redirected() as (out, _):
                 pc.parse_args(["--help"])
         text = out.getvalue()
-        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--related", "--version", "number"):
+        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--related", "--redact", "--version", "number"):
             self.assertIn(flag, text)
 
     @contextmanager
@@ -1276,6 +1278,89 @@ class TestTheFile(unittest.TestCase):
         code, term, ctx = run_tool(self.root, yes=True)
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["pr-data.txt", "sub"])
         self.assertEqual(list((self.root / "sub").iterdir()), [])
+
+
+class TestRelatedAndRedact(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    GREP = ["git", "grep", "-l", "-w", "-I", "-e", "filtered", "-e", "colours", "-e", "MAX_SIZE", "-e", "filter_widgets",
+            "-e", "test_filtered_by_colour", "-e", "test_filtered_by_size", "-e", "test_colours"]
+
+    def test_identifiers_added(self):
+        self.assertEqual(pc.identifiers_added(fx("git", "diff.patch")),
+                         ["filtered", "colours", "MAX_SIZE", "filter_widgets", "test_filtered_by_colour", "test_filtered_by_size", "test_colours"])
+        patch = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,4 @@\n+const widgetCount = 1\n+class Widget:\n-def old():\n+  x = 1\n"
+        self.assertEqual(pc.identifiers_added(patch), ["widgetCount", "Widget"])
+
+    def test_related_files_are_added(self):
+        head = SHAS["head"]
+        sh = fixture_shell(self.root).on([*self.GREP, head], f"{head}:lib/widgets/catalog.py\n{head}:lib/widgets/service.py\n{head}:README.md\n")
+        sh.on(["git", "show", f"{head}:lib/widgets/service.py"], "from lib.widgets.filter import filter_widgets\n")
+        sh.on(["git", "show", f"{head}:README.md"], "Use filtered().\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("# pr-data: Related files\n\nEvery touched file whole related to the change, at the head, at " + head, text)
+        self.assertIn("## lib/widgets/service.py", text)
+        self.assertIn("## README.md", text)
+        self.assertNotIn("## lib/widgets/catalog.py\n\n1 lines", text)
+        self.assertIn("Related files (--related): 7 identifiers (filtered, colours, MAX_SIZE, filter_widgets, test_filtered_by_colour, test_filtered_by_size, test_colours); 2 files name one of them.", text)
+        self.assertIn("· 10. Related files", text)
+        self.assertTrue(any(l.startswith("related             2 files") for l in term.said))
+
+    def test_related_cap_grep_failure_and_no_identifiers(self):
+        head = SHAS["head"]
+        many = "".join(f"{head}:extra/file{i:02d}.py\n" for i in range(30))
+        sh = fixture_shell(self.root).on([*self.GREP, head], many)
+        for i in range(pc.RELATED_CAP):
+            sh.on(["git", "show", f"{head}:extra/file{i:02d}.py"], f"# {i}\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("30 files name one of them, the first 25 included.", ctx.notes[-1])
+        sh = fixture_shell(self.root).on([*self.GREP, head], "", "fatal: bad object", 128)
+        code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("related files (git grep): fatal: bad object", ctx.missing[0])
+        sh = fixture_shell(self.root).on([*self.GREP, head], "", "", 1)
+        code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
+        self.assertIn("0 files name one of them.", ctx.notes[-1])
+        sh = fixture_shell(self.root).on(["git", "diff", "--no-color", "--no-ext-diff", f"{SHAS['merge_base']}...{head}"], "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("the diff defines no identifier to look for", ctx.notes[-1])
+
+    def test_redact_text_spares_gutter_and_shas(self):
+        rx = [re.compile(r"\b\d{3}\b"), re.compile("secret")]
+        text = "     12    345   call(123) secret\n" + ("a" * 40) + " 777 " + "0123456789abcdef0123456789abcdef01234567 123\nplain 999 secret"
+        out, n = pc.redact_text(text, rx)
+        self.assertEqual(out.split("\n")[0], "     12    345   call([REDACTED]) [REDACTED]")
+        self.assertEqual(out.split("\n")[1], "a" * 40 + " [REDACTED] 0123456789abcdef0123456789abcdef01234567 123")
+        self.assertEqual(out.split("\n")[2], "plain [REDACTED] [REDACTED]")
+        self.assertEqual(n, 5)
+        sha_only = "0123456789abcdef0123456789abcdef01234567"
+        self.assertEqual(pc.redact_text(sha_only, [re.compile("456")]), (sha_only, 0))
+
+    def test_redact_flag_end_to_end(self):
+        code, term, ctx = run_tool(self.root, yes=True, redact=[r"reviewer-two", r"\bMAX_SIZE\b"])
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertNotIn("reviewer-two", text.split("# pr-data: Pull request", 1)[1])
+        self.assertIn("**@[REDACTED]** · 2026-03-03T09:01:00Z", text)
+        self.assertIn("            3 + [REDACTED] = 10", text)
+        self.assertIn("Redactions (--redact): Pull request 1, Conversation ", text)
+        self.assertIn(SHAS["head"], text)
+        code, term, ctx = run_tool(self.root, yes=True, redact=["nothing-like-this"])
+        self.assertIn("Redactions (--redact): nothing matched.", ctx.notes[-1])
+
+    def test_redact_bad_pattern_stops(self):
+        code, term, ctx = run_tool(self.root, yes=True, redact=["("])
+        self.assertEqual(code, 1)
+        self.assertIn("--redact '(' is not a valid pattern", term.warned[0])
 
 
 if __name__ == "__main__":
