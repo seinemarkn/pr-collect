@@ -1435,6 +1435,22 @@ def render_annotated_diff(ctx: Context, c: Collected) -> str:
     return "\n".join(out) + "\n"
 
 
+def split_sections(text: str) -> list[tuple[str, str]]:
+    """The sections of a pr-data.txt, by their headings: what a reader does to take it apart."""
+    sections: list[tuple[str, str]] = []
+    name, body = None, []
+    for line in text.split("\n"):
+        if line.startswith(HEADING_PREFIX):
+            if name is not None:
+                sections.append((name, "\n".join(body)))
+            name, body = line[len(HEADING_PREFIX):], []
+        elif name is not None:
+            body.append(line)
+    if name is not None:
+        sections.append((name, "\n".join(body)))
+    return sections
+
+
 # ==== cli ====
 
 
@@ -1481,6 +1497,10 @@ def collect(ctx: Context) -> Path:
     ticket = check_ticket_against(ctx, ticket, pr.get("title", ""), "pull request's title")
     ticket = check_ticket_against(ctx, ticket, pr.get("body") or "", "pull request's description")
     c = Collected(repo, branch, ticket, number, pr, ctx.clock())
+    ctx.notes.append(
+        "Secrets that GitHub masks in Actions logs arrive masked; nothing else is masked. "
+        "Look through the file before carrying it anywhere else."
+    )
     me = gh_json(ctx, ["api", "user"], optional=True)
     c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
     ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")

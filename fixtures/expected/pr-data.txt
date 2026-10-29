@@ -9,6 +9,7 @@
 - **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits, 1 failed jobs, 5 files changed
 - **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Diff · 8. Files at head · 9. Files at base
 - **Notes:**
+  - Secrets that GitHub masks in Actions logs arrive masked; nothing else is masked. Look through the file before carrying it anywhere else.
   - The diff reconciles with GitHub's file list: 5 files, +41 -0.
 - **Requests to GitHub:** 17
 

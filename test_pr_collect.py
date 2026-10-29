@@ -1055,7 +1055,7 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         self.assertIn("5 files changed", text)
-        self.assertIn("- **Notes:**\n  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
+        self.assertIn("  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
         diff = self.section(text, "Diff")
         self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", self.section(text, "Annotated diff"))
         self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines, as git wrote it", diff)
@@ -1236,6 +1236,46 @@ class TestAnnotatedDiff(unittest.TestCase):
         self.assertFalse(pc.line_matches(pc.Thread("x", "p", None, 1, None, "RIGHT", False, True, []), pc.DiffLine("added", None, 1, "")))
         blank = pc.Thread("x", "p", None, 1, None, "RIGHT", False, True, [pc.ThreadComment(1, "a", "b", "t", "", "abc")])
         self.assertIn("`(blank)`", pc.render_annotated_file(ctx2, pc.DiffFile("p", "p", [], []), None, [blank], {("abc", "p"): "\n\n"}))
+
+
+class TestTheFile(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_nine_sections_in_order_and_split_back(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        names = [n for n, _ in pc.split_sections(text)]
+        self.assertEqual(names, pc.SECTION_ORDER)
+        self.assertEqual(len(names), 9)
+        self.assertEqual(pc.split_sections("no heading\n"), [])
+        self.assertEqual(pc.split_sections("# pr-data: A\n\nx\n# pr-data: B\n"), [("A", "\nx"), ("B", "")])
+
+    def test_nothing_is_fetched_twice(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        calls = [tuple(c) for c in ctx.shell.calls]
+        self.assertEqual(len(calls), len(set(calls)), [c for c in calls if calls.count(c) > 1])
+        self.assertEqual(ctx.shell.gh_calls, 17)
+        self.assertIn("**Requests to GitHub:** 17", (self.root / "pr-data.txt").read_text())
+
+    def test_header_carries_the_masking_note_and_the_progress_lines_name_every_part(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("Secrets that GitHub masks in Actions logs arrive masked; nothing else is masked.", text)
+        starts = [line.split()[0] for line in term.said]
+        for part in ("ticket", "pull", "refs", "conversation", "commits", "checks", "diff", "files", "wrote", "Do"):
+            self.assertIn(part, starts, part)
+
+    def test_the_file_is_written_only_at_the_root_and_nothing_else(self):
+        (self.root / "sub").mkdir()
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["pr-data.txt", "sub"])
+        self.assertEqual(list((self.root / "sub").iterdir()), [])
 
 
 if __name__ == "__main__":
