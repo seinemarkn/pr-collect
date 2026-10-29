@@ -292,5 +292,222 @@ class TestMain(unittest.TestCase):
         self.assertIn("pr-collect:", err.getvalue())
 
 
+class TestReadTicket(unittest.TestCase):
+    def test_key_shape_any_letters(self):
+        for branch, number, key in [
+            ("GLOB-10680-fingerprint-status", 10680, "GLOB-10680"),
+            ("feature/ABC-77-small-thing", 77, "ABC-77"),
+            ("2026-10-29-X9-5000-dated", 5000, "X9-5000"),
+            ("fix-500-error-PROJ-10800-rapback", 10800, "PROJ-10800"),
+        ]:
+            t = pc.read_ticket(branch, "branch name")
+            self.assertEqual((t.number, t.key), (number, key), branch)
+            self.assertIn("as the key", t.source)
+
+    def test_first_run_of_digits_over_100(self):
+        t = pc.read_ticket("10800-rapback-subscribed-ui-update", "branch name")
+        self.assertEqual((t.number, t.key), (10800, None))
+        self.assertIn("greater than 100", t.source)
+        self.assertEqual(pc.read_ticket("v2-fix-7-things-then-4321", "branch name").number, 4321)
+        self.assertEqual(pc.read_ticket("fix-500-error-10800-rapback", "branch name").number, 500)
+
+    def test_nothing(self):
+        self.assertIsNone(pc.read_ticket("rapback-ui-fixes", "branch name"))
+        self.assertIsNone(pc.read_ticket("v2-fix-100-things", "branch name"))
+        self.assertIsNone(pc.read_ticket("feature/abc-77-lower-case-is-not-a-key", "branch name"))
+        self.assertIsNone(pc.read_ticket("", "branch name"))
+
+    def test_explain_branch(self):
+        self.assertIn("no digits", pc.explain_branch("rapback-ui-fixes"))
+        self.assertIn("greater than 100", pc.explain_branch("v2-fix-7"))
+
+    def test_ticket_from_answer(self):
+        self.assertEqual(pc.ticket_from_answer(" 10800 ", "typed").label, "10800")
+        self.assertEqual(pc.ticket_from_answer("proj-10800", "typed").label, "PROJ-10800")
+        with self.assertRaises(pc.CollectError):
+            pc.ticket_from_answer("ten thousand", "typed")
+
+    def test_label(self):
+        self.assertEqual(pc.Ticket(5, "AB-5").label, "AB-5")
+        self.assertEqual(pc.Ticket(5).label, "5")
+
+
+class TestIdentifyTicket(unittest.TestCase):
+    def run_it(self, branch, answers=(), interactive=True, **opts):
+        term = FakeTerminal(list(answers), interactive)
+        ctx = pc.Context(FakeShell(), term, pc.Options(**opts))
+        ticket = pc.identify_ticket(ctx, branch)
+        return ticket, term, ctx
+
+    def test_t_option_wins_and_asks_nothing(self):
+        ticket, term, _ = self.run_it("rapback-ui-fixes", ticket="10800")
+        self.assertEqual(ticket.label, "10800")
+        self.assertEqual(term.asked, [])
+        self.assertIn("from the -t option", term.said[0])
+
+    def test_confirmed_yes(self):
+        for answer in ("", "y", "Yes"):
+            ticket, term, _ = self.run_it("10800-rapback", [answer])
+            self.assertEqual(ticket.number, 10800)
+            self.assertEqual(len(term.asked), 1)
+            self.assertIn("Is ticket 10800 correct?", term.asked[0])
+
+    def test_confirmed_no_then_typed(self):
+        ticket, term, _ = self.run_it("fix-500-error-10800-rapback", ["n", "10800"])
+        self.assertEqual(ticket.number, 10800)
+        self.assertEqual(len(term.asked), 2)
+
+    def test_typed_straight_at_the_confirmation(self):
+        ticket, term, _ = self.run_it("fix-500-error-10800-rapback", ["PROJ-10800"])
+        self.assertEqual(ticket.label, "PROJ-10800")
+
+    def test_no_then_empty_stops(self):
+        with self.assertRaises(pc.CollectError) as cm:
+            self.run_it("10800-rapback", ["no", ""])
+        self.assertIn("no ticket number given", str(cm.exception))
+
+    def test_yes_option_skips_the_question(self):
+        ticket, term, ctx = self.run_it("10800-rapback", yes=True)
+        self.assertEqual(term.asked, [])
+        self.assertEqual(ctx.notes, [])
+
+    def test_not_interactive_takes_it_and_notes(self):
+        ticket, term, ctx = self.run_it("10800-rapback", interactive=False)
+        self.assertEqual(ticket.number, 10800)
+        self.assertEqual(len(ctx.notes), 1)
+        self.assertIn("without confirmation", ctx.notes[0])
+
+    def test_no_ticket_in_branch_then_prompt(self):
+        ticket, term, _ = self.run_it("rapback-ui-fixes", ["10800"])
+        self.assertEqual(ticket.number, 10800)
+        self.assertIn("has no digits", term.warned[0])
+        self.assertIn("Ticket number", term.asked[0])
+
+    def test_no_ticket_in_branch_empty_answer_stops(self):
+        with self.assertRaises(pc.CollectError) as cm:
+            self.run_it("rapback-ui-fixes", [""])
+        self.assertIn("No ticket number given", str(cm.exception))
+
+    def test_no_ticket_in_branch_not_interactive_stops(self):
+        with self.assertRaises(pc.CollectError) as cm:
+            self.run_it("v2-fix-7", interactive=False)
+        self.assertIn("greater than 100", str(cm.exception))
+        self.assertIn("-t <number>", str(cm.exception))
+
+
+class TestCheckTicketAgainst(unittest.TestCase):
+    def ctx(self):
+        return pc.Context(FakeShell(), FakeTerminal(), pc.Options())
+
+    def test_same_number_fills_in_the_letters(self):
+        ctx = self.ctx()
+        t = pc.check_ticket_against(ctx, pc.Ticket(10800, None, "the branch name"), "[PROJ-10800] Add a thing", "pull request's title")
+        self.assertEqual(t.key, "PROJ-10800")
+        self.assertIn("letters from the pull request's title", t.source)
+        self.assertEqual(ctx.notes, [])
+
+    def test_different_number_is_said_and_branch_stands(self):
+        ctx = self.ctx()
+        t = pc.check_ticket_against(ctx, pc.Ticket(10800, "PROJ-10800"), "PROJ-10801 follow-up", "pull request's title")
+        self.assertEqual(t.label, "PROJ-10800")
+        self.assertIn("names ticket PROJ-10801, not PROJ-10800", ctx.notes[0])
+        self.assertEqual(len(ctx.terminal.warned), 1)
+
+    def test_nothing_in_the_text_or_already_keyed(self):
+        ctx = self.ctx()
+        t = pc.Ticket(10800, "PROJ-10800")
+        self.assertIs(pc.check_ticket_against(ctx, t, "Add a thing", "title"), t)
+        self.assertIs(pc.check_ticket_against(ctx, t, "PROJ-10800 again", "title"), t)
+        self.assertIs(pc.check_ticket_against(ctx, t, None, "description"), t)
+
+
+class TestFindPullRequest(unittest.TestCase):
+    REPO = pc.Repo("github.com", "example", "widgets", Path("/tmp"))
+    LIST = ["gh", "pr", "list", "-R", "github.com/example/widgets", "--head", "DEMO-123-x", "--state", "open", "--json", "number,title,url"]
+
+    def test_number_argument_wins(self):
+        ctx = pc.Context(FakeShell(), FakeTerminal(), pc.Options(number=7))
+        self.assertEqual(pc.find_pull_request(ctx, self.REPO, "DEMO-123-x"), 7)
+        self.assertEqual(ctx.shell.calls, [])
+
+    def test_one_open_pull_request(self):
+        sh = FakeShell().on(self.LIST, '[{"number": 42, "title": "Add filter", "url": "u"}]')
+        ctx = pc.Context(sh, FakeTerminal(), pc.Options())
+        self.assertEqual(pc.find_pull_request(ctx, self.REPO, "DEMO-123-x"), 42)
+        self.assertIn("pull request #42", ctx.terminal.said[0])
+
+    def test_none_open(self):
+        ctx = pc.Context(FakeShell().on(self.LIST, "[]"), FakeTerminal(), pc.Options())
+        with self.assertRaises(pc.CollectError) as cm:
+            pc.find_pull_request(ctx, self.REPO, "DEMO-123-x")
+        self.assertIn("no open pull request", str(cm.exception))
+
+    def test_more_than_one(self):
+        ctx = pc.Context(FakeShell().on(self.LIST, '[{"number": 1, "title": "a", "url": ""}, {"number": 2, "title": "b", "url": ""}]'), FakeTerminal(), pc.Options())
+        with self.assertRaises(pc.CollectError) as cm:
+            pc.find_pull_request(ctx, self.REPO, "DEMO-123-x")
+        self.assertIn("more than one open pull request (1, 2)", str(cm.exception))
+
+
+class TestCurrentBranch(unittest.TestCase):
+    def test_branch(self):
+        ctx = pc.Context(FakeShell().on(["git", "rev-parse", "--abbrev-ref", "HEAD"], "DEMO-123-x\n"), FakeTerminal(), pc.Options())
+        self.assertEqual(pc.current_branch(ctx), "DEMO-123-x")
+
+    def test_detached(self):
+        ctx = pc.Context(FakeShell().on(["git", "rev-parse", "--abbrev-ref", "HEAD"], "HEAD\n"), FakeTerminal(), pc.Options())
+        with self.assertRaises(pc.CollectError):
+            pc.current_branch(ctx)
+
+
+class TestGhJson(unittest.TestCase):
+    def ctx(self, shell):
+        return pc.Context(shell, FakeTerminal(), pc.Options())
+
+    def test_concatenated_lists_and_objects(self):
+        self.assertEqual(pc._decode_concatenated('[1,2]\n[3]'), [1, 2, 3])
+        self.assertEqual(pc._decode_concatenated('{"a":[1],"n":1}{"a":[2],"n":2}'), {"a": [1, 2], "n": 2})
+        self.assertEqual(pc._decode_concatenated('{"a":1}'), {"a": 1})
+        self.assertEqual(pc._decode_concatenated('[1]{"a":1}'), [1])
+        self.assertIsNone(pc._decode_concatenated("  "))
+
+    def test_api_paginates_and_decodes(self):
+        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/things"], '[{"id":1}][{"id":2}]')
+        self.assertEqual(pc.gh_api(self.ctx(sh), "repos/x/y/things"), [{"id": 1}, {"id": 2}])
+        sh.on(["gh", "api", "--hostname", "h", "repos/x/y/one"], '{"id":3}')
+        self.assertEqual(pc.gh_api(self.ctx(sh), "repos/x/y/one", paginate=False, host="h"), {"id": 3})
+
+    def test_failure_raises_or_records(self):
+        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/logs"], "", "HTTP 404: Not Found", 1)
+        ctx = self.ctx(sh)
+        with self.assertRaises(pc.CollectError) as cm:
+            pc.gh_api(ctx, "repos/x/y/logs")
+        self.assertIn("HTTP 404", str(cm.exception))
+        self.assertIsNone(pc.gh_api(ctx, "repos/x/y/logs", optional=True))
+        self.assertIn("HTTP 404", ctx.missing[0])
+        sh.on(["gh", "api", "--paginate", "repos/x/y/silent"], "", "", 1)
+        with self.assertRaises(pc.CollectError) as cm:
+            pc.gh_api(ctx, "repos/x/y/silent")
+        self.assertIn("no output", str(cm.exception))
+        self.assertIsNone(pc.gh_api(ctx, "repos/x/y/silent", optional=True))
+        self.assertIn("failed", ctx.missing[1])
+
+    def test_rate_limit_waits_then_succeeds(self):
+        answers = iter([("", "HTTP 403: API rate limit exceeded. Retry-After: 7", 1), ("[1]", "", 0)])
+        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/z"], lambda: next(answers))
+        ctx = self.ctx(sh)
+        self.assertEqual(pc.gh_api(ctx, "repos/x/y/z"), [1])
+        self.assertEqual(sh.slept, [7])
+        self.assertIn("wait (7s)", ctx.terminal.warned[0])
+
+    def test_rate_limit_without_retry_after_waits_the_default_and_gives_up(self):
+        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/z"], "", "HTTP 429 secondary rate limit", 1)
+        ctx = self.ctx(sh)
+        with self.assertRaises(pc.CollectError):
+            pc.gh_api(ctx, "repos/x/y/z")
+        self.assertEqual(sh.slept, [pc.DEFAULT_RETRY_WAIT] * pc.RETRY_LIMIT)
+        self.assertEqual(len(sh.calls), pc.RETRY_LIMIT + 1)
+
+
 if __name__ == "__main__":
     unittest.main()
