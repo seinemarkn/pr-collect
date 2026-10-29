@@ -100,6 +100,41 @@ def working_directory(path: Path):
         os.chdir(before)
 
 
+FIXTURES = HERE / "fixtures"
+SHAS = __import__("json").loads((FIXTURES / "git" / "shas.json").read_text())
+REPO_ARG = "github.com/example/widgets"
+FIXED_TIME = pc.datetime(2026, 3, 5, 10, 30, 0, tzinfo=pc.timezone.utc)
+
+
+def fx(*parts: str) -> str:
+    return (FIXTURES.joinpath(*parts)).read_text()
+
+
+def fixture_shell(root: Path) -> FakeShell:
+    """Every gh and git answer for the made-up pull request #42."""
+    sh = good_preflight(FakeShell(), root)
+    sh.on(["git", "rev-parse", "--abbrev-ref", "HEAD"], SHAS["head_branch"] + "\n")
+    sh.on(["gh", "pr", "list", "-R", REPO_ARG, "--head", SHAS["head_branch"], "--state", "open", "--json", "number,title,url"],
+          '[{"number": 42, "title": "[DEMO-123] Add a filter to the widget catalog", "url": "https://github.com/example/widgets/pull/42"}]')
+    sh.on(["gh", "pr", "view", "42", "-R", REPO_ARG, "--json", pc.PR_FIELDS], fx("gh", "pr-view.json"))
+    sh.on(["gh", "api", "user"], fx("gh", "user.json"))
+    return sh
+
+
+def run_tool(root: Path, shell: FakeShell | None = None, answers=(), **opts) -> tuple[int, FakeTerminal, "pc.Context"]:
+    shell = shell or fixture_shell(root)
+    term = FakeTerminal(list(answers))
+    ctx = pc.Context(shell, term, pc.Options(**opts), clock=lambda: FIXED_TIME)
+    with working_directory(root):
+        try:
+            pc.collect(ctx)
+            code = 0
+        except pc.CollectError as err:
+            term.warn(str(err))
+            code = 1
+    return code, term, ctx
+
+
 def good_preflight(shell: FakeShell, root: Path, host: str = "github.com") -> FakeShell:
     shell.on(["gh", "--version"], "gh version 2.0.0\n")
     shell.on(["git", "rev-parse", "--show-toplevel"], f"{root}\n")
@@ -507,6 +542,153 @@ class TestGhJson(unittest.TestCase):
             pc.gh_api(ctx, "repos/x/y/z")
         self.assertEqual(sh.slept, [pc.DEFAULT_RETRY_WAIT] * pc.RETRY_LIMIT)
         self.assertEqual(len(sh.calls), pc.RETRY_LIMIT + 1)
+
+
+class TestRendering(unittest.TestCase):
+    def test_fence_for_and_fenced(self):
+        self.assertEqual(pc.fence_for("plain"), "```")
+        self.assertEqual(pc.fence_for("a ``` b"), "````")
+        self.assertEqual(pc.fence_for("a ````` b"), "``````")
+        self.assertEqual(pc.fenced("x", "py"), "```py\nx\n```\n")
+        self.assertEqual(pc.fenced("x\n"), "```\nx\n```\n")
+
+    def test_labels(self):
+        self.assertEqual(pc.short(None), "?")
+        self.assertEqual(pc.short("0123456789abcdef"), "0123456789")
+        self.assertEqual(pc.user_label(None), "(unknown)")
+        self.assertEqual(pc.user_label({"login": "x"}), "@x")
+        self.assertEqual(pc.user_label({"name": "X Y"}), "X Y")
+        self.assertEqual(pc.user_label({"login": "x", "name": "X Y"}), "X Y (@x)")
+        self.assertEqual(pc.user_label({}), "(unknown)")
+        self.assertEqual(pc.pr_state({"state": "OPEN", "isDraft": True}), "open, draft")
+        self.assertEqual(pc.pr_state({"state": "MERGED"}), "merged")
+
+    def test_assemble_headings(self):
+        text = pc.assemble([pc.Section("Header", "a\n"), pc.Section("Diff", "b")])
+        self.assertEqual(text, "# pr-data: Header\n\na\n\n# pr-data: Diff\n\nb\n")
+
+
+class TestPullRequestSection(unittest.TestCase):
+    def collected(self, **changes):
+        pr = {**__import__("json").loads(fx("gh", "pr-view.json")), **changes}
+        repo = pc.Repo("github.com", "example", "widgets", Path("/tmp"))
+        return pc.Collected(repo, "DEMO-123-add-widget-filter", pc.Ticket(123, "DEMO-123", "the branch name"), 42, pr, FIXED_TIME)
+
+    def test_every_field_of_the_record(self):
+        text = pc.render_pull_request(self.collected())
+        for piece in [
+            "#42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42)",
+            "Octo Developer (@octo-dev)", "**State:** open", "main at ?", f"at {SHAS['head'][:10]}",
+            "5 files, +55 -0", "enhancement, needs review", "@octo-dev", "@reviewer-two, team widgets-team",
+            "CHANGES_REQUESTED", "MERGEABLE, merge state BLOCKED", "2026-03-02T09:15:00Z", "**Merged:** no",
+            "#40 Catalog cannot be filtered", "**Milestone:** 1.2", "**From a fork:** no",
+            "## Description", "- `python3 -m unittest`",
+        ]:
+            self.assertIn(piece, text, piece)
+
+    def test_draft_merged_closed_and_empty(self):
+        self.assertIn("**State:** open, draft", pc.render_pull_request(self.collected(isDraft=True)))
+        merged = pc.render_pull_request(self.collected(state="MERGED", mergedAt="2026-03-06T10:00:00Z", mergedBy={"login": "boss"}))
+        self.assertIn("**State:** merged", merged)
+        self.assertIn("**Merged:** 2026-03-06T10:00:00Z by @boss", merged)
+        bare = pc.render_pull_request(self.collected(
+            state="CLOSED", body="", labels=[], assignees=[], reviewRequests=[], closingIssuesReferences=[],
+            milestone=None, reviewDecision=None, mergeable=None, mergeStateStatus=None, isCrossRepository=True,
+            headRepositoryOwner={"login": "forker"}))
+        for piece in ["**State:** closed", "(no description)", "**Labels:** none", "**Assignees:** none",
+                      "**Reviewers requested:** none", "**Linked issues:** none", "**Milestone:** none",
+                      "none yet", "unknown, merge state unknown", "**From a fork:** yes, forker"]:
+            self.assertIn(piece, bare, piece)
+
+    def test_fetch_checks_the_number(self):
+        sh = FakeShell().on(["gh", "pr", "view", "7", "-R", REPO_ARG, "--json", pc.PR_FIELDS], '{"number": 8}')
+        ctx = pc.Context(sh, FakeTerminal(), pc.Options())
+        with self.assertRaises(pc.CollectError) as cm:
+            pc.fetch_pull_request(ctx, pc.Repo("github.com", "example", "widgets", Path("/tmp")), 7)
+        self.assertIn("#7 was not found", str(cm.exception))
+
+
+class TestHeaderSection(unittest.TestCase):
+    def test_header_lines(self):
+        root = Path("/tmp")
+        repo = pc.Repo("github.com", "example", "widgets", root)
+        pr = __import__("json").loads(fx("gh", "pr-view.json"))
+        c = pc.Collected(repo, "DEMO-123-add-widget-filter", pc.Ticket(123, "DEMO-123", "the branch name, as the key DEMO-123"), 42, pr, FIXED_TIME, "@me")
+        ctx = pc.Context(FakeShell(), FakeTerminal(), pc.Options())
+        ctx.shell.calls = [["gh", "api", "x"]]
+        text = pc.render_header(ctx, c, ["Header", "Pull request"])
+        self.assertIn("**Ticket:** DEMO-123 (number 123), from the branch name, as the key DEMO-123", text)
+        self.assertIn("**Branch:** DEMO-123-add-widget-filter into main", text)
+        self.assertIn(f"**Head:** {SHAS['head']} · **Base:** ? · **Merge base:** ?", text)
+        self.assertIn("**Taken:** 2026-03-05T10:30:00Z by @me with pr-collect", text)
+        self.assertIn("**Sections:** 1. Header · 2. Pull request", text)
+        self.assertIn("**Requests to GitHub:** 1", text)
+        self.assertNotIn("Counts", text)
+        self.assertNotIn("Not collected", text)
+        c.counts = {"comments": 2, "threads": 5, "unresolved": 3, "commits": 3, "failed_jobs": 1, "files": 5}
+        c.status_line = "all green"
+        c.ticket = pc.Ticket(123, None, "the -t option")
+        ctx.missing.append("the logs: HTTP 403")
+        ctx.notes.append("a note")
+        text = pc.render_header(ctx, c, ["Header"])
+        self.assertIn("**Ticket:** 123, from the -t option", text)
+        self.assertIn("**Checks:** all green", text)
+        self.assertIn("2 comments, 5 review threads (3 unresolved), 3 commits, 1 failed jobs, 5 files changed", text)
+        self.assertIn("- **Not collected:**\n  - the logs: HTTP 403", text)
+        self.assertIn("- **Notes:**\n  - a note", text)
+
+
+class TestEndToEnd(unittest.TestCase):
+    """The whole run against the made-up pull request, byte for byte against the golden file."""
+
+    GOLDEN = FIXTURES / "expected" / "pr-data.txt"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_golden_file(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        if os.environ.get("PR_COLLECT_UPDATE_GOLDEN"):
+            self.GOLDEN.write_text(text)
+        self.assertEqual(text, self.GOLDEN.read_text())
+        self.assertEqual(term.said[-1], "Do not commit pr-data.txt: it holds other people's comments and code.")
+        self.assertIn(str(self.root / "pr-data.txt"), term.said[-2])
+
+    def test_second_run_writes_in_place_and_says_so(self):
+        run_tool(self.root, yes=True)
+        code, term, _ = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0)
+        self.assertIn("written again in place", term.said[-2])
+
+    def test_title_letters_fill_in_the_key_and_the_ticket_is_confirmed(self):
+        sh = fixture_shell(self.root)
+        sh.on(["git", "rev-parse", "--abbrev-ref", "HEAD"], "123-add-widget-filter\n")
+        sh.on(["gh", "pr", "list", "-R", REPO_ARG, "--head", "123-add-widget-filter", "--state", "open", "--json", "number,title,url"],
+              '[{"number": 42, "title": "t", "url": "u"}]')
+        code, term, ctx = run_tool(self.root, sh, answers=["y"])
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("Is ticket 123 correct?", term.asked[0])
+        self.assertIn("**Ticket:** DEMO-123 (number 123), from the branch name, as the first number greater than 100; the letters from the pull request's title", (self.root / "pr-data.txt").read_text())
+
+    def test_taken_by_is_blank_when_user_cannot_be_read(self):
+        sh = fixture_shell(self.root).on(["gh", "api", "user"], "", "HTTP 401", 1)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0)
+        self.assertIn("by ? with pr-collect", (self.root / "pr-data.txt").read_text())
+        self.assertIn("HTTP 401", ctx.missing[0])
+
+    def test_main_end_to_end(self):
+        sh = fixture_shell(self.root)
+        term = FakeTerminal()
+        with working_directory(self.root):
+            code = pc.main(["--yes"], sh, term)
+        self.assertEqual(code, 0, term.warned)
 
 
 if __name__ == "__main__":

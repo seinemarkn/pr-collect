@@ -1,0 +1,17 @@
+a72c8862aa73edbeaedbf5f35fb2b283c6ec6c9bOcto Developerocto-dev@example.com2026-03-02T09:00:00ZAdd filter_widgets and Catalog.filtered
+
+The catalog can now be narrowed by colour or by a smallest size.
+The filter lives in its own module so it can be reused.
+
+
+9	0	lib/widgets/catalog.py
+15	0	lib/widgets/filter.py
+f66400410996cbed33edd573a0ca529a32e9054dOcto Developerocto-dev@example.com2026-03-02T11:30:00ZTest the filter and the colour list
+
+
+9	0	tests/test_catalog.py
+22abb9a877c8810578042c25ccf0b591950f23f8Octo Developerocto-dev@example.com2026-03-04T15:00:00ZDocument filtering; rename the usage page
+
+
+-	-	docs/diagram.png
+8	0	docs/{usage.md => filtering.md}

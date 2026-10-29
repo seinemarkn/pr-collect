@@ -1,0 +1,88 @@
+diff --git a/docs/diagram.png b/docs/diagram.png
+new file mode 100644
+index 0000000..b95afc7
+Binary files /dev/null and b/docs/diagram.png differ
+diff --git a/docs/usage.md b/docs/filtering.md
+similarity index 63%
+rename from docs/usage.md
+rename to docs/filtering.md
+index 6673897..bb780bf 100644
+--- a/docs/usage.md
++++ b/docs/filtering.md
+@@ -11,3 +11,11 @@ catalog.largest()
+ ```
+ 
+ The default catalog holds four widgets.
++
++## Filtering
++
++Narrow the catalog by colour or by a smallest size:
++
++```python
++catalog.filtered(colour="red").names()
++```
+diff --git a/lib/widgets/catalog.py b/lib/widgets/catalog.py
+index f268019..7614da6 100644
+--- a/lib/widgets/catalog.py
++++ b/lib/widgets/catalog.py
+@@ -2,6 +2,8 @@
+ 
+ from dataclasses import dataclass
+ 
++from lib.widgets.filter import filter_widgets
++
+ 
+ @dataclass(frozen=True)
+ class Widget:
+@@ -32,3 +34,10 @@ class Catalog:
+ 
+     def total_size(self):
+         return sum(w.size for w in self.widgets)
++
++    def filtered(self, colour=None, min_size=None):
++        """A new catalog holding only the matching widgets."""
++        return Catalog(filter_widgets(self.widgets, colour=colour, min_size=min_size))
++
++    def colours(self):
++        return sorted({w.colour for w in self.widgets})
+diff --git a/lib/widgets/filter.py b/lib/widgets/filter.py
+new file mode 100644
+index 0000000..212369e
+--- /dev/null
++++ b/lib/widgets/filter.py
+@@ -0,0 +1,15 @@
++"""Filtering a catalog by colour or size."""
++
++MAX_SIZE = 10
++
++
++def filter_widgets(widgets, colour=None, min_size=None):
++    """The widgets matching every given condition, in their original order."""
++    chosen = []
++    for widget in widgets:
++        if colour is not None and widget.colour != colour:
++            continue
++        if min_size is not None and widget.size < min_size:
++            continue
++        chosen.append(widget)
++    return chosen
+diff --git a/tests/test_catalog.py b/tests/test_catalog.py
+index 2b3f02c..5d3d85a 100644
+--- a/tests/test_catalog.py
++++ b/tests/test_catalog.py
+@@ -16,6 +16,15 @@ class TestCatalog(unittest.TestCase):
+     def test_empty(self):
+         self.assertEqual(Catalog([]).names(), [])
+ 
++    def test_filtered_by_colour(self):
++        self.assertEqual(Catalog().filtered(colour="red").names(), ["bolt", "spring"])
++
++    def test_filtered_by_size(self):
++        self.assertEqual(Catalog().filtered(min_size=3).names(), ["gear", "spring"])
++
++    def test_colours(self):
++        self.assertEqual(Catalog().colours(), ["blue", "green", "red"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

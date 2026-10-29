@@ -1,0 +1,5 @@
+A	docs/diagram.png
+R063	docs/usage.md	docs/filtering.md
+M	lib/widgets/catalog.py
+A	lib/widgets/filter.py
+M	tests/test_catalog.py

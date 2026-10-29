@@ -1,0 +1,37 @@
+# pr-data: Header
+
+- **Ticket:** DEMO-123 (number 123), from the branch name, as the key DEMO-123
+- **Pull request:** #42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42) on example/widgets (github.com)
+- **Branch:** DEMO-123-add-widget-filter into main
+- **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** ? · **Merge base:** ?
+- **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
+- **Sections:** 1. Header · 2. Pull request
+- **Requests to GitHub:** 5
+
+# pr-data: Pull request
+
+- **Number:** #42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42)
+- **Author:** Octo Developer (@octo-dev)
+- **State:** open
+- **Base:** main at ? · **Head:** DEMO-123-add-widget-filter at 22abb9a877 · **Merge base:** ?
+- **Size:** 5 files, +55 -0
+- **Labels:** enhancement, needs review
+- **Assignees:** @octo-dev
+- **Reviewers requested:** @reviewer-two, team widgets-team
+- **Review decision:** CHANGES_REQUESTED
+- **Mergeable:** MERGEABLE, merge state BLOCKED
+- **Created:** 2026-03-02T09:15:00Z · **Updated:** 2026-03-04T16:40:00Z · **Merged:** no
+- **Linked issues:** #40 Catalog cannot be filtered (https://github.com/example/widgets/issues/40)
+- **Milestone:** 1.2
+- **From a fork:** no
+
+## Description
+
+Adds `filter_widgets` and `Catalog.filtered` so the catalog can be narrowed by colour or by a smallest size.
+
+Closes #40.
+
+## Testing
+
+- `python3 -m unittest`
+- Opened the catalog page and filtered by colour; the list narrowed as expected.

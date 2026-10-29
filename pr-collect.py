@@ -109,6 +109,10 @@ class Options:
     related: bool = False
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass
 class Context:
     shell: Shell
@@ -116,6 +120,7 @@ class Context:
     options: Options
     missing: list[str] = field(default_factory=list)  # parts not collected, with why
     notes: list[str] = field(default_factory=list)  # things said in the header
+    clock: object = utc_now
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +388,167 @@ def gh_api(ctx: Context, path: str, *, paginate: bool = True, optional: bool = F
     return gh_json(ctx, args, optional=optional)
 
 
+# ---------------------------------------------------------------------------
+# What is collected, and the file it becomes.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Collected:
+    repo: Repo
+    branch: str
+    ticket: Ticket
+    number: int
+    pr: dict
+    taken_at: datetime
+    taken_by: str = ""
+    base_sha: str | None = None
+    head_sha: str | None = None
+    merge_base: str | None = None
+    counts: dict = field(default_factory=dict)
+    status_line: str = ""
+
+
+@dataclass
+class Section:
+    name: str
+    body: str
+
+
+HEADING_PREFIX = "# pr-data: "
+SECTION_ORDER = [
+    "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
+    "Checks", "Diff", "Files at head", "Files at base",
+]
+
+
+def fence_for(text: str) -> str:
+    """A backtick fence longer than any run of backticks in the text, three at least."""
+    longest = max((len(m.group(0)) for m in re.finditer(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
+def fenced(text: str, info: str = "") -> str:
+    fence = fence_for(text)
+    body = text if text.endswith("\n") else text + "\n"
+    return f"{fence}{info}\n{body}{fence}\n"
+
+
+def short(sha: str | None) -> str:
+    return sha[:10] if sha else "?"
+
+
+def user_label(user: dict | None) -> str:
+    if not user:
+        return "(unknown)"
+    login = user.get("login") or ""
+    name = user.get("name") or ""
+    if name and login:
+        return f"{name} (@{login})"
+    return f"@{login}" if login else name or "(unknown)"
+
+
+def pr_state(pr: dict) -> str:
+    state = (pr.get("state") or "").lower()
+    return f"{state}, draft" if pr.get("isDraft") else state
+
+
+def fetch_pull_request(ctx: Context, repo: Repo, number: int) -> dict:
+    pr = gh_json(ctx, ["pr", "view", str(number), "-R", f"{repo.host}/{repo.full_name}", "--json", PR_FIELDS])
+    if not isinstance(pr, dict) or pr.get("number") != number:
+        raise CollectError(f"pull request #{number} was not found on {repo.full_name}")
+    return pr
+
+
+PR_FIELDS = ",".join([
+    "number", "title", "body", "author", "state", "isDraft", "url", "baseRefName",
+    "headRefName", "headRefOid", "additions", "deletions", "changedFiles", "labels",
+    "assignees", "reviewRequests", "reviewDecision", "mergeable", "mergeStateStatus",
+    "createdAt", "updatedAt", "mergedAt", "mergedBy", "closingIssuesReferences",
+    "isCrossRepository", "headRepositoryOwner", "milestone",
+])
+
+
+def render_pull_request(c: Collected) -> str:
+    pr = c.pr
+    reviewers = [f"@{r['login']}" if "login" in r else f"team {r.get('slug') or r.get('name')}" for r in pr.get("reviewRequests") or []]
+    linked = [f"#{i['number']} {i.get('title', '')} ({i.get('url', '')})".strip() for i in pr.get("closingIssuesReferences") or []]
+    lines = [
+        f"- **Number:** #{pr['number']} [{pr.get('title', '')}]({pr.get('url', '')})",
+        f"- **Author:** {user_label(pr.get('author'))}",
+        f"- **State:** {pr_state(pr)}",
+        f"- **Base:** {pr.get('baseRefName')} at {short(c.base_sha)} · **Head:** {pr.get('headRefName')} at {short(c.head_sha or pr.get('headRefOid'))} · **Merge base:** {short(c.merge_base)}",
+        f"- **Size:** {pr.get('changedFiles', 0)} files, +{pr.get('additions', 0)} -{pr.get('deletions', 0)}",
+        f"- **Labels:** {', '.join(l['name'] for l in pr.get('labels') or []) or 'none'}",
+        f"- **Assignees:** {', '.join('@' + a['login'] for a in pr.get('assignees') or []) or 'none'}",
+        f"- **Reviewers requested:** {', '.join(reviewers) or 'none'}",
+        f"- **Review decision:** {pr.get('reviewDecision') or 'none yet'}",
+        f"- **Mergeable:** {pr.get('mergeable') or 'unknown'}, merge state {pr.get('mergeStateStatus') or 'unknown'}",
+        f"- **Created:** {pr.get('createdAt')} · **Updated:** {pr.get('updatedAt')} · **Merged:** {pr.get('mergedAt') or 'no'}"
+        + (f" by {user_label(pr.get('mergedBy'))}" if pr.get("mergedBy") else ""),
+        f"- **Linked issues:** {'; '.join(linked) or 'none'}",
+        f"- **Milestone:** {(pr.get('milestone') or {}).get('title') or 'none'}",
+        f"- **From a fork:** {'yes, ' + (pr.get('headRepositoryOwner') or {}).get('login', '?') if pr.get('isCrossRepository') else 'no'}",
+        "",
+        "## Description",
+        "",
+        (pr.get("body") or "(no description)").rstrip("\n"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_header(ctx: Context, c: Collected, names: list[str]) -> str:
+    pr = c.pr
+    t = c.ticket
+    ticket_line = f"- **Ticket:** {t.label}"
+    if t.key:
+        ticket_line += f" (number {t.number})"
+    ticket_line += f", from {t.source}"
+    counts = c.counts
+    count_bits = [f"{counts[k]} {label}" for k, label in [
+        ("comments", "comments"), ("threads", "review threads"), ("commits", "commits"),
+        ("failed_jobs", "failed jobs"), ("files", "files changed"),
+    ] if k in counts]
+    if "unresolved" in counts and "threads" in counts:
+        count_bits[1] = f"{counts['threads']} review threads ({counts['unresolved']} unresolved)"
+    lines = [
+        ticket_line,
+        f"- **Pull request:** #{pr['number']} [{pr.get('title', '')}]({pr.get('url', '')}) on {c.repo.full_name} ({c.repo.host})",
+        f"- **Branch:** {c.branch} into {pr.get('baseRefName')}",
+        f"- **Head:** {c.head_sha or pr.get('headRefOid')} · **Base:** {c.base_sha or '?'} · **Merge base:** {c.merge_base or '?'}",
+        f"- **Taken:** {c.taken_at.strftime('%Y-%m-%dT%H:%M:%SZ')} by {c.taken_by or '?'} with pr-collect {__version__}",
+    ]
+    if c.status_line:
+        lines.append(f"- **Checks:** {c.status_line}")
+    if count_bits:
+        lines.append(f"- **Counts:** {', '.join(count_bits)}")
+    lines.append("- **Sections:** " + " · ".join(f"{i}. {n}" for i, n in enumerate(names, 1)))
+    if ctx.missing:
+        lines.append("- **Not collected:**")
+        lines += [f"  - {m}" for m in ctx.missing]
+    if ctx.notes:
+        lines.append("- **Notes:**")
+        lines += [f"  - {n}" for n in ctx.notes]
+    lines.append(f"- **Requests to GitHub:** {ctx.shell.gh_calls}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def assemble(sections: list[Section]) -> str:
+    """The file: every section under its fixed heading, in order."""
+    parts = []
+    for s in sections:
+        parts.append(f"{HEADING_PREFIX}{s.name}\n\n{s.body.rstrip()}\n")
+    return "\n".join(parts)
+
+
+def write_output(root: Path, text: str) -> Path:
+    path = root / OUTPUT_NAME
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return path
+
+
 # ==== cli ====
 
 
@@ -425,7 +591,21 @@ def collect(ctx: Context) -> Path:
     branch = current_branch(ctx)
     ticket = identify_ticket(ctx, branch)
     number = find_pull_request(ctx, repo, branch)
-    raise CollectError(f"pull request #{number}, ticket {ticket.label}: nothing past identity is built yet")
+    pr = fetch_pull_request(ctx, repo, number)
+    ticket = check_ticket_against(ctx, ticket, pr.get("title", ""), "pull request's title")
+    ticket = check_ticket_against(ctx, ticket, pr.get("body") or "", "pull request's description")
+    c = Collected(repo, branch, ticket, number, pr, ctx.clock())
+    me = gh_json(ctx, ["api", "user"], optional=True)
+    c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
+    ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")
+    sections = [Section("Pull request", render_pull_request(c))]
+    existed = (repo.root / OUTPUT_NAME).exists()
+    names = ["Header"] + [s.name for s in sections]
+    sections.insert(0, Section("Header", render_header(ctx, c, names)))
+    path = write_output(repo.root, assemble(sections))
+    ctx.terminal.say(f"wrote {path}" + (" (written again in place)" if existed else ""))
+    ctx.terminal.say(f"Do not commit {OUTPUT_NAME}: it holds other people's comments and code.")
+    return path
 
 
 def main(argv: list[str] | None = None, shell: Shell | None = None, terminal: Terminal | None = None) -> int:

@@ -1,0 +1,61 @@
+{
+  "number": 42,
+  "title": "[DEMO-123] Add a filter to the widget catalog",
+  "body": "Adds `filter_widgets` and `Catalog.filtered` so the catalog can be narrowed by colour or by a smallest size.\n\nCloses #40.\n\n## Testing\n\n- `python3 -m unittest`\n- Opened the catalog page and filtered by colour; the list narrowed as expected.\n",
+  "author": {
+    "login": "octo-dev",
+    "name": "Octo Developer"
+  },
+  "state": "OPEN",
+  "isDraft": false,
+  "url": "https://github.com/example/widgets/pull/42",
+  "baseRefName": "main",
+  "headRefName": "DEMO-123-add-widget-filter",
+  "headRefOid": "22abb9a877c8810578042c25ccf0b591950f23f8",
+  "additions": 55,
+  "deletions": 0,
+  "changedFiles": 5,
+  "labels": [
+    {
+      "name": "enhancement"
+    },
+    {
+      "name": "needs review"
+    }
+  ],
+  "assignees": [
+    {
+      "login": "octo-dev"
+    }
+  ],
+  "reviewRequests": [
+    {
+      "login": "reviewer-two"
+    },
+    {
+      "name": "widgets-team",
+      "slug": "widgets-team"
+    }
+  ],
+  "reviewDecision": "CHANGES_REQUESTED",
+  "mergeable": "MERGEABLE",
+  "mergeStateStatus": "BLOCKED",
+  "createdAt": "2026-03-02T09:15:00Z",
+  "updatedAt": "2026-03-04T16:40:00Z",
+  "mergedAt": null,
+  "mergedBy": null,
+  "closingIssuesReferences": [
+    {
+      "number": 40,
+      "title": "Catalog cannot be filtered",
+      "url": "https://github.com/example/widgets/issues/40"
+    }
+  ],
+  "isCrossRepository": false,
+  "headRepositoryOwner": {
+    "login": "example"
+  },
+  "milestone": {
+    "title": "1.2"
+  }
+}

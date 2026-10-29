@@ -1,0 +1,5 @@
+-	-	docs/diagram.png
+8	0	docs/{usage.md => filtering.md}
+9	0	lib/widgets/catalog.py
+15	0	lib/widgets/filter.py
+9	0	tests/test_catalog.py
