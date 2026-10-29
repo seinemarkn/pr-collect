@@ -1,0 +1,22 @@
+[
+  {
+    "id": 9001,
+    "user": {
+      "login": "reviewer-one"
+    },
+    "created_at": "2026-03-02T12:00:00Z",
+    "updated_at": "2026-03-02T12:00:00Z",
+    "html_url": "https://github.com/example/widgets/pull/42#issuecomment-9001",
+    "body": "Thanks for picking this up. Could you also list the colours the catalog holds? The page needs them for the dropdown."
+  },
+  {
+    "id": 9002,
+    "user": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T12:30:00Z",
+    "updated_at": "2026-03-02T12:30:00Z",
+    "html_url": "https://github.com/example/widgets/pull/42#issuecomment-9002",
+    "body": "Added `Catalog.colours()` in the second commit.\n\n```python\nCatalog().colours()  # ['blue', 'green', 'red']\n```"
+  }
+]

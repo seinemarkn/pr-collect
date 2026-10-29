@@ -5,8 +5,9 @@
 - **Branch:** DEMO-123-add-widget-filter into main
 - **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** ? · **Merge base:** ?
 - **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
-- **Sections:** 1. Header · 2. Pull request
-- **Requests to GitHub:** 5
+- **Counts:** 9 comments, 5 review threads (3 unresolved)
+- **Sections:** 1. Header · 2. Pull request · 3. Conversation
+- **Requests to GitHub:** 9
 
 # pr-data: Pull request
 
@@ -35,3 +36,110 @@ Closes #40.
 
 - `python3 -m unittest`
 - Opened the catalog page and filtered by colour; the list narrowed as expected.
+
+# pr-data: Conversation
+
+## 2026-03-02T09:00:00Z · commit a72c8862aa pushed: Add filter_widgets and Catalog.filtered
+
+## 2026-03-02T09:15:00Z · Octo Developer (@octo-dev) opened the pull request
+
+The description is in the Pull request section.
+
+## 2026-03-02T09:16:00Z · @octo-dev added the label "enhancement"
+
+## 2026-03-02T09:17:00Z · @octo-dev requested a review from @reviewer-two
+
+## 2026-03-02T09:17:05Z · @octo-dev requested a review from team widgets-team
+
+## 2026-03-02T11:30:00Z · commit f664004109 pushed: Test the filter and the colour list
+
+## 2026-03-02T12:00:00Z · @reviewer-one commented
+
+> Thanks for picking this up. Could you also list the colours the catalog holds? The page needs them for the dropdown.
+
+## 2026-03-02T12:30:00Z · @octo-dev commented
+
+> Added `Catalog.colours()` in the second commit.
+>
+> ```python
+> Catalog().colours()  # ['blue', 'green', 'red']
+> ```
+
+## 2026-03-02T13:00:00Z · @octo-dev converted the pull request to a draft
+
+## 2026-03-02T14:00:00Z · @octo-dev marked the pull request ready for review
+
+## 2026-03-03T09:00:00Z · @reviewer-two reviewed: requested changes (at f664004109)
+
+> Two things before this goes in: the unused constant, and the filter should not rebuild the catalog by hand.
+
+## 2026-03-03T09:01:00Z · review thread
+
+**Review thread** on lib/widgets/filter.py line 3 (new side) · unresolved
+
+**@reviewer-two** · 2026-03-03T09:01:00Z · https://github.com/example/widgets/pull/42#discussion_r8001
+> `MAX_SIZE` is never read. Either use it in the size check or drop it; a constant nobody reads will confuse the next reader.
+
+**@octo-dev** · 2026-03-03T10:15:00Z · https://github.com/example/widgets/pull/42#discussion_r8002
+> It was meant for a later `max_size` option. I will drop it until that lands.
+
+## 2026-03-03T09:02:00Z · review thread
+
+**Review thread** on lib/widgets/catalog.py line 37 (new side) · resolved
+
+**@reviewer-two** · 2026-03-03T09:02:00Z · https://github.com/example/widgets/pull/42#discussion_r8003
+> Building a new `Catalog` here means the default list is copied twice. Pass the filtered list straight in:
+>
+> *(suggested replacement for the line(s) commented on)*
+> ```suggestion
+>     def filtered(self, colour=None, min_size=None):
+>         return Catalog(filter_widgets(self.widgets, colour, min_size))
+> ```
+
+**@octo-dev** · 2026-03-03T10:20:00Z · https://github.com/example/widgets/pull/42#discussion_r8004
+> Taken, thanks.
+
+## 2026-03-03T09:03:00Z · review thread
+
+**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved
+
+**@reviewer-two** · 2026-03-03T09:03:00Z · https://github.com/example/widgets/pull/42#discussion_r8007
+> The docstring said "all widgets" but the function filters; reworded?
+
+## 2026-03-04T14:55:00Z · @octo-dev force-pushed the branch
+
+## 2026-03-04T15:00:00Z · commit 22abb9a877 pushed: Document filtering; rename the usage page
+
+## 2026-03-04T16:00:00Z · @reviewer-one reviewed: commented (at 22abb9a877)
+
+## 2026-03-04T16:00:00Z · review thread
+
+**Review thread** on tests/test_catalog.py line 20 (new side) · unresolved
+
+**@reviewer-one** · 2026-03-04T16:00:00Z · https://github.com/example/widgets/pull/42#discussion_r8005
+> A case with both `colour` and `min_size` set would show the two conditions combine with *and*.
+
+## 2026-03-04T16:00:30Z · review thread
+
+**Review thread** on lib/widgets/catalog.py line 3 (old side) · unresolved
+
+**@reviewer-one** · 2026-03-04T16:00:30Z · https://github.com/example/widgets/pull/42#discussion_r8006
+> Not from this change, but `dataclass` is imported and `Widget` could be a plain `NamedTuple`; a later clean-up.
+
+## 2026-03-04T16:01:00Z · @reviewer-one added the label "needs review"
+
+## 2026-03-04T16:02:00Z · @reviewer-one removed the label "wip"
+
+## 2026-03-04T16:03:00Z · @octo-dev renamed the pull request from "Add a filter" to "[DEMO-123] Add a filter to the widget catalog"
+
+## 2026-03-04T16:04:00Z · @octo-dev assigned @octo-dev
+
+## 2026-03-04T16:05:00Z · @octo-dev set the milestone "1.2"
+
+## 2026-03-04T16:06:00Z · @reviewer-one referenced this from #40 Catalog cannot be filtered
+
+## 2026-03-04T16:08:00Z · @octo-dev removed the review request for @reviewer-one
+
+## 2026-03-04T16:09:00Z · @octo-dev changed the base branch
+
+## 2026-03-04T16:10:00Z · @octo-dev: some_new_event

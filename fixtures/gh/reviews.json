@@ -1,0 +1,24 @@
+[
+  {
+    "id": 7001,
+    "user": {
+      "login": "reviewer-two"
+    },
+    "state": "CHANGES_REQUESTED",
+    "submitted_at": "2026-03-03T09:00:00Z",
+    "commit_id": "f66400410996cbed33edd573a0ca529a32e9054d",
+    "html_url": "https://github.com/example/widgets/pull/42#pullrequestreview-7001",
+    "body": "Two things before this goes in: the unused constant, and the filter should not rebuild the catalog by hand."
+  },
+  {
+    "id": 7002,
+    "user": {
+      "login": "reviewer-one"
+    },
+    "state": "COMMENTED",
+    "submitted_at": "2026-03-04T16:00:00Z",
+    "commit_id": "22abb9a877c8810578042c25ccf0b591950f23f8",
+    "body": "",
+    "html_url": "https://github.com/example/widgets/pull/42#pullrequestreview-7002"
+  }
+]

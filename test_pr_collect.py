@@ -118,7 +118,17 @@ def fixture_shell(root: Path) -> FakeShell:
           '[{"number": 42, "title": "[DEMO-123] Add a filter to the widget catalog", "url": "https://github.com/example/widgets/pull/42"}]')
     sh.on(["gh", "pr", "view", "42", "-R", REPO_ARG, "--json", pc.PR_FIELDS], fx("gh", "pr-view.json"))
     sh.on(["gh", "api", "user"], fx("gh", "user.json"))
+    api = ["gh", "api", "--hostname", "github.com", "--paginate"]
+    sh.on([*api, "repos/example/widgets/issues/42/comments"], fx("gh", "issue-comments.json"))
+    sh.on([*api, "repos/example/widgets/pulls/42/reviews"], fx("gh", "reviews.json"))
+    sh.on([*api, "repos/example/widgets/issues/42/timeline"], fx("gh", "timeline.json"))
+    sh.on(graphql_argv(), fx("gh", "review-threads.json"))
     return sh
+
+
+def graphql_argv() -> list[str]:
+    return ["gh", "api", "--hostname", "github.com", "graphql", "--paginate", "-f", f"query={pc.REVIEW_THREADS_QUERY}",
+            "-F", "owner=example", "-F", "name=widgets", "-F", "number=42"]
 
 
 def run_tool(root: Path, shell: FakeShell | None = None, answers=(), **opts) -> tuple[int, FakeTerminal, "pc.Context"]:
@@ -506,40 +516,42 @@ class TestGhJson(unittest.TestCase):
         self.assertEqual(pc._decode_concatenated('[1]{"a":1}'), [1])
         self.assertIsNone(pc._decode_concatenated("  "))
 
+    REPO = pc.Repo("h", "x", "y", Path("/tmp"))
+
     def test_api_paginates_and_decodes(self):
-        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/things"], '[{"id":1}][{"id":2}]')
-        self.assertEqual(pc.gh_api(self.ctx(sh), "repos/x/y/things"), [{"id": 1}, {"id": 2}])
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/things"], '[{"id":1}][{"id":2}]')
+        self.assertEqual(pc.gh_api(self.ctx(sh), self.REPO, "repos/x/y/things"), [{"id": 1}, {"id": 2}])
         sh.on(["gh", "api", "--hostname", "h", "repos/x/y/one"], '{"id":3}')
-        self.assertEqual(pc.gh_api(self.ctx(sh), "repos/x/y/one", paginate=False, host="h"), {"id": 3})
+        self.assertEqual(pc.gh_api(self.ctx(sh), self.REPO, "repos/x/y/one", paginate=False), {"id": 3})
 
     def test_failure_raises_or_records(self):
-        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/logs"], "", "HTTP 404: Not Found", 1)
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/logs"], "", "HTTP 404: Not Found", 1)
         ctx = self.ctx(sh)
         with self.assertRaises(pc.CollectError) as cm:
-            pc.gh_api(ctx, "repos/x/y/logs")
+            pc.gh_api(ctx, self.REPO, "repos/x/y/logs")
         self.assertIn("HTTP 404", str(cm.exception))
-        self.assertIsNone(pc.gh_api(ctx, "repos/x/y/logs", optional=True))
+        self.assertIsNone(pc.gh_api(ctx, self.REPO, "repos/x/y/logs", optional=True))
         self.assertIn("HTTP 404", ctx.missing[0])
-        sh.on(["gh", "api", "--paginate", "repos/x/y/silent"], "", "", 1)
+        sh.on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/silent"], "", "", 1)
         with self.assertRaises(pc.CollectError) as cm:
-            pc.gh_api(ctx, "repos/x/y/silent")
+            pc.gh_api(ctx, self.REPO, "repos/x/y/silent")
         self.assertIn("no output", str(cm.exception))
-        self.assertIsNone(pc.gh_api(ctx, "repos/x/y/silent", optional=True))
+        self.assertIsNone(pc.gh_api(ctx, self.REPO, "repos/x/y/silent", optional=True))
         self.assertIn("failed", ctx.missing[1])
 
     def test_rate_limit_waits_then_succeeds(self):
         answers = iter([("", "HTTP 403: API rate limit exceeded. Retry-After: 7", 1), ("[1]", "", 0)])
-        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/z"], lambda: next(answers))
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/z"], lambda: next(answers))
         ctx = self.ctx(sh)
-        self.assertEqual(pc.gh_api(ctx, "repos/x/y/z"), [1])
+        self.assertEqual(pc.gh_api(ctx, self.REPO, "repos/x/y/z"), [1])
         self.assertEqual(sh.slept, [7])
         self.assertIn("wait (7s)", ctx.terminal.warned[0])
 
     def test_rate_limit_without_retry_after_waits_the_default_and_gives_up(self):
-        sh = FakeShell().on(["gh", "api", "--paginate", "repos/x/y/z"], "", "HTTP 429 secondary rate limit", 1)
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/z"], "", "HTTP 429 secondary rate limit", 1)
         ctx = self.ctx(sh)
         with self.assertRaises(pc.CollectError):
-            pc.gh_api(ctx, "repos/x/y/z")
+            pc.gh_api(ctx, self.REPO, "repos/x/y/z")
         self.assertEqual(sh.slept, [pc.DEFAULT_RETRY_WAIT] * pc.RETRY_LIMIT)
         self.assertEqual(len(sh.calls), pc.RETRY_LIMIT + 1)
 
@@ -689,6 +701,126 @@ class TestEndToEnd(unittest.TestCase):
         with working_directory(self.root):
             code = pc.main(["--yes"], sh, term)
         self.assertEqual(code, 0, term.warned)
+
+
+class TestConversation(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def collected(self, shell=None):
+        code, term, ctx = run_tool(self.root, shell, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        return term, ctx, (self.root / "pr-data.txt").read_text()
+
+    def test_threads_are_read_from_graphql(self):
+        sh = fixture_shell(self.root)
+        repo = pc.Repo("github.com", "example", "widgets", self.root)
+        c = pc.Collected(repo, "b", pc.Ticket(1), 42, {}, FIXED_TIME)
+        threads = pc.fetch_review_threads(pc.Context(sh, FakeTerminal(), pc.Options()), c)
+        self.assertEqual([t.id for t in threads], ["T1", "T2", "T3", "T4", "T5"])
+        t1, t2, t4, t5 = threads[0], threads[1], threads[3], threads[4]
+        self.assertEqual((t1.path, t1.line, t1.side, t1.resolved, t1.outdated), ("lib/widgets/filter.py", 3, "RIGHT", False, False))
+        self.assertEqual(t1.where, "lib/widgets/filter.py line 3 (new side)")
+        self.assertEqual(t4.where, "lib/widgets/catalog.py line 3 (old side)")
+        self.assertEqual(t5.where, "lib/widgets/filter.py, originally line 7 (new side), outdated")
+        self.assertEqual(len(t2.comments), 2)
+        self.assertEqual(t2.comments[0].login, "reviewer-two")
+        self.assertEqual(t2.comments[0].original_commit, SHAS["commits"][1])
+        self.assertTrue(t2.resolved)
+        self.assertEqual(t1.created_at, "2026-03-03T09:01:00Z")
+
+    def test_threads_paginate_and_survive_gaps(self):
+        sh = fixture_shell(self.root).on(graphql_argv(), fx("gh", "review-threads-two-pages.json"))
+        repo = pc.Repo("github.com", "example", "widgets", self.root)
+        c = pc.Collected(repo, "b", pc.Ticket(1), 42, {}, FIXED_TIME)
+        self.assertEqual(len(pc.fetch_review_threads(pc.Context(sh, FakeTerminal(), pc.Options()), c)), 5)
+        sh.on(graphql_argv(), '{"data": null}{"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [{"comments": {"nodes": [{"author": null}]}}]}}}}}')
+        threads = pc.fetch_review_threads(pc.Context(sh, FakeTerminal(), pc.Options()), c)
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0].comments[0].login, "ghost")
+        self.assertEqual(threads[0].side, "RIGHT")
+        self.assertEqual(threads[0].created_at, "")
+        self.assertEqual(pc.Thread("x", "p", 5, 5, 3, "RIGHT", False, False, []).where, "p lines 3-5 (new side)")
+        self.assertEqual(pc.Thread("x", "p", 5, 5, 5, "RIGHT", False, False, []).where, "p line 5 (new side)")
+
+    def test_threads_failure_is_recorded_not_fatal(self):
+        sh = fixture_shell(self.root).on(graphql_argv(), "", "GraphQL: something", 1)
+        term, ctx, text = self.collected(sh)
+        self.assertIn("the review threads (gh api graphql): GraphQL: something", ctx.missing[0])
+        self.assertIn("0 review threads (0 unresolved)", term.said[-3])
+
+    def test_conversation_is_in_time_order_and_complete(self):
+        term, ctx, text = self.collected()
+        conv = text.split("# pr-data: Conversation\n", 1)[1].split("\n# pr-data: ", 1)[0]
+        headings = [l for l in conv.splitlines() if l.startswith("## ")]
+        times = [h[3:23] for h in headings]
+        self.assertEqual(times, sorted(times))
+        self.assertEqual(headings[1], "## 2026-03-02T09:15:00Z · Octo Developer (@octo-dev) opened the pull request")
+        self.assertTrue(headings[0].startswith("## 2026-03-02T09:00:00Z · commit"), headings[0])
+        for piece in [
+            f"commit {SHAS['commits'][0][:10]} pushed: Add filter_widgets and Catalog.filtered",
+            "@octo-dev added the label \"enhancement\"",
+            "@octo-dev requested a review from @reviewer-two",
+            "@octo-dev requested a review from team widgets-team",
+            "@reviewer-one commented\n\n> Thanks for picking this up.",
+            "> ```python\n> Catalog().colours()  # ['blue', 'green', 'red']\n> ```",
+            "@octo-dev converted the pull request to a draft",
+            "@octo-dev marked the pull request ready for review",
+            f"@reviewer-two reviewed: requested changes (at {SHAS['commits'][1][:10]})\n\n> Two things",
+            "@reviewer-one reviewed: commented (at",
+            "@octo-dev force-pushed the branch\n",
+            "@reviewer-one removed the label \"wip\"",
+            "renamed the pull request from \"Add a filter\" to \"[DEMO-123] Add a filter to the widget catalog\"",
+            "@octo-dev assigned @octo-dev",
+            "@octo-dev set the milestone \"1.2\"",
+            "@reviewer-one referenced this from #40 Catalog cannot be filtered",
+            "@octo-dev removed the review request for @reviewer-one",
+            "@octo-dev changed the base branch",
+            "@octo-dev: some_new_event",
+            "**Review thread** on lib/widgets/filter.py line 3 (new side) · unresolved",
+            "**Review thread** on lib/widgets/catalog.py line 37 (new side) · resolved",
+            "**Review thread** on lib/widgets/catalog.py line 3 (old side) · unresolved",
+            "**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved",
+            "*(suggested replacement for the line(s) commented on)*\n> ```suggestion\n>     def filtered",
+            "**@octo-dev** · 2026-03-03T10:20:00Z · https://github.com/example/widgets/pull/42#discussion_r8004\n> Taken, thanks.",
+        ]:
+            self.assertIn(piece, conv, piece)
+        for skipped in ["(skipped", "mentioned", "subscribed"]:
+            self.assertNotIn(skipped, conv)
+        self.assertIn("**Counts:** 9 comments, 5 review threads (3 unresolved)", text)
+
+    def test_event_lines_for_the_rarer_events(self):
+        a = {"login": "a"}
+        cases = {
+            ("merged",): "@a merged the pull request",
+            ("closed",): "@a closed the pull request",
+            ("reopened",): "@a reopened the pull request",
+            ("review_dismissed",): "@a dismissed a review",
+            ("head_ref_deleted",): "@a deleted the branch",
+            ("head_ref_restored",): "@a restored the branch",
+            ("unassigned",): "@a unassigned @ghost",
+            ("demilestoned",): "@a removed the milestone \"\"",
+            ("unsubscribed",): None,
+        }
+        for (kind,), expected in cases.items():
+            self.assertEqual(pc.describe_event({"event": kind, "actor": a}), expected, kind)
+        self.assertEqual(pc.describe_event({"event": "merged", "actor": a, "commit_id": "abcdef0123456"}), "@a merged the pull request as abcdef0123")
+        self.assertEqual(pc.describe_event({"event": "head_ref_force_pushed", "actor": a, "commit_id": "abcdef0123456"}), "@a force-pushed the branch to abcdef0123")
+        self.assertEqual(pc.describe_event({"event": "cross-referenced", "actor": a, "source": {}}), "@a referenced this from #?")
+        self.assertEqual(pc.event_time({"event": "committed", "author": {"date": "A"}}), "A")
+        self.assertEqual(pc.event_time({"event": "committed"}), "")
+        self.assertEqual(pc.event_time({"event": "labeled"}), "")
+        self.assertEqual(pc.review_verdict("approved"), "approved")
+        self.assertEqual(pc.review_verdict("DISMISSED"), "review dismissed")
+        self.assertEqual(pc.review_verdict("PENDING"), "review pending")
+        self.assertEqual(pc.review_verdict("odd"), "odd")
+        self.assertEqual(pc.review_verdict(None), "reviewed")
+        self.assertEqual(pc.quoted(""), "> (empty)")
+        self.assertEqual(pc.quoted("a\n\nb\n"), "> a\n>\n> b")
 
 
 if __name__ == "__main__":

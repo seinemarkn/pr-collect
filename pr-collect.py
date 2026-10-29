@@ -325,15 +325,7 @@ def find_pull_request(ctx: Context, repo: Repo, branch: str) -> int:
 def _decode_concatenated(text: str):
     """gh --paginate writes one JSON document per page, back to back. Join them: lists
     are concatenated, objects merge their list-valued keys."""
-    decoder = json.JSONDecoder()
-    docs = []
-    pos = 0
-    text = text.strip()
-    while pos < len(text):
-        doc, pos = decoder.raw_decode(text, pos)
-        docs.append(doc)
-        while pos < len(text) and text[pos].isspace():
-            pos += 1
+    docs = _decode_documents(text)
     if not docs:
         return None
     if all(isinstance(d, list) for d in docs):
@@ -378,14 +370,26 @@ def gh_json(ctx: Context, args: list[str], *, optional: bool = False):
     return _decode_concatenated(r.stdout)
 
 
-def gh_api(ctx: Context, path: str, *, paginate: bool = True, optional: bool = False, host: str | None = None):
-    args = ["api"]
-    if host:
-        args += ["--hostname", host]
+def gh_api(ctx: Context, repo: Repo, path: str, *, paginate: bool = True, optional: bool = False):
+    args = ["api", "--hostname", repo.host]
     if paginate:
         args.append("--paginate")
     args.append(path)
     return gh_json(ctx, args, optional=optional)
+
+
+def _decode_documents(text: str) -> list:
+    """Every JSON document in gh's output, in order (one per page with --paginate)."""
+    decoder = json.JSONDecoder()
+    docs = []
+    pos = 0
+    text = text.strip()
+    while pos < len(text):
+        doc, pos = decoder.raw_decode(text, pos)
+        docs.append(doc)
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+    return docs
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +411,10 @@ class Collected:
     merge_base: str | None = None
     counts: dict = field(default_factory=dict)
     status_line: str = ""
+    comments: list = field(default_factory=list)
+    reviews: list = field(default_factory=list)
+    events: list = field(default_factory=list)
+    threads: list = field(default_factory=list)
 
 
 @dataclass
@@ -549,6 +557,218 @@ def write_output(root: Path, text: str) -> Path:
     return path
 
 
+# ---------------------------------------------------------------------------
+# The conversation: comments, reviews, review threads, and the events between them.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ThreadComment:
+    id: int | None
+    login: str
+    body: str
+    created_at: str
+    url: str = ""
+    original_commit: str | None = None
+
+
+@dataclass
+class Thread:
+    id: str
+    path: str
+    line: int | None  # on the side given, in the diff as it is now; None when outdated
+    original_line: int | None
+    start_line: int | None
+    side: str  # RIGHT (the new side) or LEFT (the old side)
+    resolved: bool
+    outdated: bool
+    comments: list[ThreadComment]
+
+    @property
+    def created_at(self) -> str:
+        return self.comments[0].created_at if self.comments else ""
+
+    @property
+    def where(self) -> str:
+        side = "new side" if self.side == "RIGHT" else "old side"
+        if self.line is None:
+            return f"{self.path}, originally line {self.original_line} ({side}), outdated"
+        span = f"lines {self.start_line}-{self.line}" if self.start_line and self.start_line != self.line else f"line {self.line}"
+        return f"{self.path} {span} ({side})"
+
+
+REVIEW_THREADS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line originalLine startLine diffSide
+          comments(first: 100) {
+            nodes { databaseId author { login } body createdAt url originalCommit { oid } }
+          }
+        }
+      }
+    }
+  }
+}
+""".strip()
+
+
+def fetch_review_threads(ctx: Context, c: Collected) -> list[Thread]:
+    r = gh_run(ctx, [
+        "api", "--hostname", c.repo.host, "graphql", "--paginate",
+        "-f", f"query={REVIEW_THREADS_QUERY}", "-F", f"owner={c.repo.owner}",
+        "-F", f"name={c.repo.name}", "-F", f"number={c.number}",
+    ])
+    if not r.ok:
+        ctx.missing.append(f"the review threads (gh api graphql): {r.stderr.strip() or 'failed'}")
+        return []
+    threads = []
+    for doc in _decode_documents(r.stdout):
+        page = (((doc.get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {}
+        for node in page.get("nodes") or []:
+            comments = [
+                ThreadComment(
+                    cm.get("databaseId"), (cm.get("author") or {}).get("login") or "ghost",
+                    cm.get("body") or "", cm.get("createdAt") or "", cm.get("url") or "",
+                    (cm.get("originalCommit") or {}).get("oid"),
+                )
+                for cm in (node.get("comments") or {}).get("nodes") or []
+            ]
+            threads.append(Thread(
+                node.get("id") or "", node.get("path") or "", node.get("line"), node.get("originalLine"),
+                node.get("startLine"), node.get("diffSide") or "RIGHT",
+                bool(node.get("isResolved")), bool(node.get("isOutdated")), comments,
+            ))
+    return threads
+
+
+def fetch_conversation(ctx: Context, c: Collected) -> None:
+    base = f"repos/{c.repo.full_name}"
+    c.comments = gh_api(ctx, c.repo, f"{base}/issues/{c.number}/comments", optional=True) or []
+    c.reviews = gh_api(ctx, c.repo, f"{base}/pulls/{c.number}/reviews", optional=True) or []
+    c.events = gh_api(ctx, c.repo, f"{base}/issues/{c.number}/timeline", optional=True) or []
+    c.threads = fetch_review_threads(ctx, c)
+    c.counts["comments"] = len(c.comments) + sum(len(t.comments) for t in c.threads)
+    c.counts["threads"] = len(c.threads)
+    c.counts["unresolved"] = sum(1 for t in c.threads if not t.resolved)
+    ctx.terminal.say(
+        f"conversation        {len(c.comments)} comments, {len(c.reviews)} reviews, "
+        f"{len(c.threads)} review threads ({c.counts['unresolved']} unresolved)"
+    )
+
+
+SUGGESTION_RE = re.compile(r"^```suggestion[ \t]*$", re.MULTILINE)
+
+
+def mark_suggestions(body: str) -> str:
+    """A GitHub suggestion block, kept as the code it suggests and said to be one."""
+    return SUGGESTION_RE.sub("*(suggested replacement for the line(s) commented on)*\n```suggestion", body)
+
+
+def quoted(body: str) -> str:
+    body = mark_suggestions(body.rstrip("\n")) or "(empty)"
+    return "\n".join(f"> {line}" if line else ">" for line in body.split("\n"))
+
+
+def actor(event: dict, key: str = "actor") -> str:
+    return "@" + ((event.get(key) or {}).get("login") or "ghost")
+
+
+def describe_event(e: dict) -> str | None:
+    """One line for a timeline event; None for the ones that come from another source
+    or carry nothing."""
+    kind = e.get("event")
+    if kind == "committed":
+        title = (e.get("message") or "").split("\n", 1)[0]
+        return f"commit {short(e.get('sha'))} pushed: {title}"
+    if kind == "head_ref_force_pushed":
+        return f"{actor(e)} force-pushed the branch" + (f" to {short(e['commit_id'])}" if e.get("commit_id") else "")
+    if kind == "ready_for_review":
+        return f"{actor(e)} marked the pull request ready for review"
+    if kind == "convert_to_draft":
+        return f"{actor(e)} converted the pull request to a draft"
+    if kind in ("labeled", "unlabeled"):
+        return f"{actor(e)} {'added' if kind == 'labeled' else 'removed'} the label \"{(e.get('label') or {}).get('name', '')}\""
+    if kind in ("review_requested", "review_request_removed"):
+        who = f"team {(e.get('requested_team') or {}).get('name')}" if e.get("requested_team") else actor(e, "requested_reviewer")
+        verb = "requested a review from" if kind == "review_requested" else "removed the review request for"
+        return f"{actor(e)} {verb} {who}"
+    if kind in ("assigned", "unassigned"):
+        return f"{actor(e)} {kind} {actor(e, 'assignee')}"
+    if kind == "renamed":
+        r = e.get("rename") or {}
+        return f"{actor(e)} renamed the pull request from \"{r.get('from', '')}\" to \"{r.get('to', '')}\""
+    if kind in ("milestoned", "demilestoned"):
+        return f"{actor(e)} {'set' if kind == 'milestoned' else 'removed'} the milestone \"{(e.get('milestone') or {}).get('title', '')}\""
+    if kind == "merged":
+        return f"{actor(e)} merged the pull request" + (f" as {short(e['commit_id'])}" if e.get("commit_id") else "")
+    if kind in ("closed", "reopened"):
+        return f"{actor(e)} {kind} the pull request"
+    if kind == "review_dismissed":
+        return f"{actor(e)} dismissed a review"
+    if kind == "base_ref_changed":
+        return f"{actor(e)} changed the base branch"
+    if kind in ("head_ref_deleted", "head_ref_restored"):
+        return f"{actor(e)} {'deleted' if kind == 'head_ref_deleted' else 'restored'} the branch"
+    if kind == "cross-referenced":
+        issue = ((e.get("source") or {}).get("issue") or {})
+        return f"{actor(e)} referenced this from #{issue.get('number', '?')} {issue.get('title', '')}".rstrip()
+    if kind in ("commented", "reviewed", "line-commented", "commit-commented", "mentioned", "subscribed", "unsubscribed"):
+        return None
+    return f"{actor(e)}: {kind}"
+
+
+def event_time(e: dict) -> str:
+    if e.get("event") == "committed":
+        return (e.get("committer") or e.get("author") or {}).get("date") or ""
+    return e.get("created_at") or ""
+
+
+def review_verdict(state: str) -> str:
+    return {
+        "APPROVED": "approved", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "commented",
+        "DISMISSED": "review dismissed", "PENDING": "review pending",
+    }.get((state or "").upper(), (state or "reviewed").lower())
+
+
+def render_thread(t: Thread) -> str:
+    state = "resolved" if t.resolved else "unresolved"
+    lines = [f"**Review thread** on {t.where} · {state}", ""]
+    for cm in t.comments:
+        lines.append(f"**@{cm.login}** · {cm.created_at}" + (f" · {cm.url}" if cm.url else ""))
+        lines.append(quoted(cm.body))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def render_conversation(c: Collected) -> str:
+    pr = c.pr
+    items: list[tuple[str, int, str]] = [(pr.get("createdAt") or "", 0,
+        f"## {pr.get('createdAt')} · {user_label(pr.get('author'))} opened the pull request\n\n"
+        f"The description is in the Pull request section.\n")]
+    for e in c.events:
+        line = describe_event(e)
+        if line:
+            items.append((event_time(e), 1, f"## {event_time(e)} · {line}\n"))
+    for cm in c.comments:
+        items.append((cm.get("created_at") or "", 2,
+            f"## {cm.get('created_at')} · {actor(cm, 'user')} commented\n\n{quoted(cm.get('body') or '')}\n"))
+    for rv in c.reviews:
+        when = rv.get("submitted_at") or ""
+        head = f"## {when} · {actor(rv, 'user')} reviewed: {review_verdict(rv.get('state'))}"
+        if rv.get("commit_id"):
+            head += f" (at {short(rv['commit_id'])})"
+        body = f"\n\n{quoted(rv['body'])}" if rv.get("body") else ""
+        items.append((when, 3, head + body + "\n"))
+    for t in c.threads:
+        items.append((t.created_at, 4, f"## {t.created_at} · review thread\n\n{render_thread(t)}"))
+    items.sort(key=lambda i: (i[0], i[1]))
+    return "\n".join(i[2] for i in items)
+
+
 # ==== cli ====
 
 
@@ -598,7 +818,11 @@ def collect(ctx: Context) -> Path:
     me = gh_json(ctx, ["api", "user"], optional=True)
     c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
     ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")
-    sections = [Section("Pull request", render_pull_request(c))]
+    fetch_conversation(ctx, c)
+    sections = [
+        Section("Pull request", render_pull_request(c)),
+        Section("Conversation", render_conversation(c)),
+    ]
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]
     sections.insert(0, Section("Header", render_header(ctx, c, names)))

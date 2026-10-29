@@ -1,0 +1,224 @@
+[
+  {
+    "event": "committed",
+    "sha": "a72c8862aa73edbeaedbf5f35fb2b283c6ec6c9b",
+    "message": "Add filter_widgets and Catalog.filtered\n\nThe catalog can now be narrowed by colour or by a smallest size.\nThe filter lives in its own module so it can be reused.",
+    "author": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-02T09:00:00Z"
+    },
+    "committer": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-02T09:00:00Z"
+    }
+  },
+  {
+    "event": "labeled",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T09:16:00Z",
+    "label": {
+      "name": "enhancement"
+    }
+  },
+  {
+    "event": "review_requested",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T09:17:00Z",
+    "requested_reviewer": {
+      "login": "reviewer-two"
+    }
+  },
+  {
+    "event": "review_requested",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T09:17:05Z",
+    "requested_team": {
+      "name": "widgets-team",
+      "slug": "widgets-team"
+    }
+  },
+  {
+    "event": "committed",
+    "sha": "f66400410996cbed33edd573a0ca529a32e9054d",
+    "message": "Test the filter and the colour list",
+    "author": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-02T11:30:00Z"
+    },
+    "committer": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-02T11:30:00Z"
+    }
+  },
+  {
+    "event": "commented",
+    "actor": {
+      "login": "reviewer-one"
+    },
+    "created_at": "2026-03-02T12:00:00Z",
+    "body": "(skipped: comes from the comments)"
+  },
+  {
+    "event": "convert_to_draft",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T13:00:00Z"
+  },
+  {
+    "event": "ready_for_review",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-02T14:00:00Z"
+  },
+  {
+    "event": "reviewed",
+    "actor": {
+      "login": "reviewer-two"
+    },
+    "created_at": "2026-03-03T09:00:00Z",
+    "state": "changes_requested"
+  },
+  {
+    "event": "line-commented",
+    "created_at": "2026-03-03T09:01:00Z",
+    "comments": []
+  },
+  {
+    "event": "head_ref_force_pushed",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T14:55:00Z",
+    "commit_id": null
+  },
+  {
+    "event": "committed",
+    "sha": "22abb9a877c8810578042c25ccf0b591950f23f8",
+    "message": "Document filtering; rename the usage page",
+    "author": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-04T15:00:00Z"
+    },
+    "committer": {
+      "name": "Octo Developer",
+      "email": "octo-dev@example.com",
+      "date": "2026-03-04T15:00:00Z"
+    }
+  },
+  {
+    "event": "labeled",
+    "actor": {
+      "login": "reviewer-one"
+    },
+    "created_at": "2026-03-04T16:01:00Z",
+    "label": {
+      "name": "needs review"
+    }
+  },
+  {
+    "event": "unlabeled",
+    "actor": {
+      "login": "reviewer-one"
+    },
+    "created_at": "2026-03-04T16:02:00Z",
+    "label": {
+      "name": "wip"
+    }
+  },
+  {
+    "event": "renamed",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:03:00Z",
+    "rename": {
+      "from": "Add a filter",
+      "to": "[DEMO-123] Add a filter to the widget catalog"
+    }
+  },
+  {
+    "event": "assigned",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:04:00Z",
+    "assignee": {
+      "login": "octo-dev"
+    }
+  },
+  {
+    "event": "milestoned",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:05:00Z",
+    "milestone": {
+      "title": "1.2"
+    }
+  },
+  {
+    "event": "cross-referenced",
+    "actor": {
+      "login": "reviewer-one"
+    },
+    "created_at": "2026-03-04T16:06:00Z",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "number": 40,
+        "title": "Catalog cannot be filtered"
+      }
+    }
+  },
+  {
+    "event": "mentioned",
+    "actor": {
+      "login": "reviewer-two"
+    },
+    "created_at": "2026-03-04T16:07:00Z"
+  },
+  {
+    "event": "subscribed",
+    "actor": {
+      "login": "reviewer-two"
+    },
+    "created_at": "2026-03-04T16:07:00Z"
+  },
+  {
+    "event": "review_request_removed",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:08:00Z",
+    "requested_reviewer": {
+      "login": "reviewer-one"
+    }
+  },
+  {
+    "event": "base_ref_changed",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:09:00Z"
+  },
+  {
+    "event": "some_new_event",
+    "actor": {
+      "login": "octo-dev"
+    },
+    "created_at": "2026-03-04T16:10:00Z"
+  }
+]
