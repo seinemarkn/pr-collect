@@ -107,7 +107,7 @@ FIXED_TIME = pc.datetime(2026, 3, 5, 10, 30, 0, tzinfo=pc.timezone.utc)
 
 
 def fx(*parts: str) -> str:
-    return (FIXTURES.joinpath(*parts)).read_text()
+    return (FIXTURES.joinpath(*parts)).read_bytes().decode("utf-8", errors="replace")
 
 
 def fixture_shell(root: Path) -> FakeShell:
@@ -136,6 +136,15 @@ def fixture_shell(root: Path) -> FakeShell:
     sh.on([*api, "repos/example/widgets/check-runs/6002/annotations"], fx("gh", "annotations-6002.json"))
     sh.on(["gh", "run", "view", "5001", "-R", REPO_ARG, "--log-failed"], fx("gh", "log-failed-5001.txt"))
     sh.on([*api, f"repos/example/widgets/deployments?sha={head}"], fx("gh", "deployments.json"))
+    rng = f"{mb}...{head}"
+    sh.on(["git", "diff", "--no-color", "--no-ext-diff", rng], fx("git", "diff.patch"))
+    sh.on(["git", "diff", "--name-status", "-M", rng], fx("git", "name-status.txt"))
+    sh.on(["git", "diff", "--numstat", "-M", rng], fx("git", "numstat.txt"))
+    sh.on([*api, "repos/example/widgets/pulls/42/files"], fx("gh", "pulls-files.json"))
+    for label, sha in (("head", head), ("merge-base", mb)):
+        for path in (FIXTURES / "git" / "show" / label).rglob("*"):
+            if path.is_file():
+                sh.on(["git", "show", f"{sha}:{path.relative_to(FIXTURES / 'git' / 'show' / label).as_posix()}"], fx("git", "show", label, *path.relative_to(FIXTURES / "git" / "show" / label).parts))
     return sh
 
 
@@ -1012,6 +1021,120 @@ class TestChecks(unittest.TestCase):
         text = pc.render_checks(c)
         self.assertLess(text.index("from a"), text.index("from b"))
         self.assertEqual(text.count("Log of step"), 2)
+
+
+class TestDiffAndFiles(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def section(self, text, name):
+        return text.split(f"# pr-data: {name}\n", 1)[1].split("\n# pr-data: ", 1)[0]
+
+    def test_name_status(self):
+        changes = pc.parse_name_status(fx("git", "name-status.txt"))
+        self.assertEqual([(c.status, c.path, c.old_path) for c in changes], [
+            ("added", "docs/diagram.png", None), ("renamed", "docs/filtering.md", "docs/usage.md"),
+            ("modified", "lib/widgets/catalog.py", None), ("added", "lib/widgets/filter.py", None),
+            ("modified", "tests/test_catalog.py", None)])
+        self.assertEqual(pc.parse_name_status("D\tgone.py\nT\tlink\nX\todd\nbroken\n"), [
+            pc.FileChange("removed", "gone.py"), pc.FileChange("type changed", "link"), pc.FileChange("x", "odd")])
+        gone = pc.FileChange("removed", "gone.py")
+        self.assertFalse(gone.at_head)
+        self.assertTrue(gone.at_base)
+        self.assertEqual(gone.base_path, "gone.py")
+        self.assertFalse(pc.FileChange("added", "new.py").at_base)
+        self.assertEqual(pc.FileChange("renamed", "b", "a").base_path, "a")
+
+    def test_sections_and_counts(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("5 files changed", text)
+        self.assertIn("- **Notes:**\n  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
+        diff = self.section(text, "Diff")
+        self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", diff)
+        self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines.", diff)
+        self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
+        self.assertIn("+    return chosen\n", diff)
+        self.assertIn("     unittest.main()\n````", diff)
+        head = self.section(text, "Files at head")
+        self.assertIn(f"Every touched file whole at the head, at {SHAS['head']}.", head)
+        self.assertIn("## docs/diagram.png\n\n(binary, ", head)
+        self.assertIn("## lib/widgets/filter.py\n\n15 lines.\n\n```\n\"\"\"Filtering a catalog", head)
+        self.assertIn("## docs/filtering.md\n\n", head)
+        self.assertNotIn("## docs/usage.md", head)
+        base = self.section(text, "Files at base")
+        self.assertIn(f"at the base (the merge base), at {SHAS['merge_base']}.", base)
+        self.assertIn("## docs/usage.md\n\n13 lines.", base)
+        self.assertNotIn("## lib/widgets/filter.py", base)
+        self.assertNotIn("## docs/diagram.png", base)
+        self.assertIn("## lib/widgets/catalog.py", base)
+        self.assertTrue(any(l.startswith("diff                5 files, +41 -0") for l in term.said))
+        self.assertTrue(any(l.startswith("files               5 at the head, 3 at the base") for l in term.said))
+        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits · 5. Checks · 6. Diff · 7. Files at head · 8. Files at base", text)
+
+    def test_fenced_markdown_inside_markdown_survives(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        head = self.section((self.root / "pr-data.txt").read_text(), "Files at head")
+        part = head.split("## docs/filtering.md", 1)[1].split("\n## lib/widgets/catalog.py", 1)[0]
+        self.assertIn("\n````\n# Using the catalog", part)
+        self.assertTrue(part.rstrip().endswith("````"))
+
+    def test_no_files_flag(self):
+        code, term, ctx = run_tool(self.root, yes=True, no_files=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertNotIn("# pr-data: Files at head", text)
+        self.assertIn("The touched files were left out (--no-files).", text)
+        self.assertIn("· 6. Diff\n", text)
+
+    def test_reconciliation_differences_are_said(self):
+        sh = fixture_shell(self.root).on(["gh", "api", "--hostname", "github.com", "--paginate", "repos/example/widgets/pulls/42/files"],
+            '[{"filename": "docs/diagram.png", "additions": 0, "deletions": 0}, {"filename": "lib/widgets/other.py", "additions": 50, "deletions": 2}]')
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        note = ctx.notes[-1]
+        self.assertIn("does NOT reconcile", note)
+        self.assertIn("in the git diff but not on GitHub: docs/filtering.md, lib/widgets/catalog.py, lib/widgets/filter.py, tests/test_catalog.py", note)
+        self.assertIn("on GitHub but not in the git diff: lib/widgets/other.py", note)
+        self.assertIn("git counts +41 -0, GitHub +50 -2", note)
+        self.assertEqual(len(term.warned), 1)
+
+    def test_reconciliation_skipped_when_the_list_cannot_be_read(self):
+        sh = fixture_shell(self.root).on(["gh", "api", "--hostname", "github.com", "--paginate", "repos/example/widgets/pulls/42/files"], "", "HTTP 502", 1)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertFalse(any("reconcile" in n for n in ctx.notes))
+        self.assertIn("HTTP 502", ctx.missing[0])
+
+    def test_unreadable_file_and_empty_diff(self):
+        sh = fixture_shell(self.root).on(["git", "show", f"{SHAS['head']}:lib/widgets/filter.py"], "", "fatal: path not in tree", 128)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("## lib/widgets/filter.py\n\n(not readable; see the header)", text)
+        self.assertIn(f"lib/widgets/filter.py at {SHAS['head'][:10]}: fatal: path not in tree", text)
+        c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="m", head_sha="h")
+        self.assertEqual(pc.render_diff(c), "`git diff m...h`, 0 lines.\n\n(empty)\n")
+        self.assertEqual(pc.render_file_list(c), "No files changed.\n")
+        self.assertEqual(pc.render_files({}, "h", "at the head"), "No files at the head.\n")
+        self.assertEqual(pc.change_label(pc.FileChange("modified", "a.py", None, 3, None)), "modified (+3 -0): a.py")
+
+    def test_git_diff_failure_stops(self):
+        sh = fixture_shell(self.root).on(["git", "diff", "--no-color", "--no-ext-diff", f"{SHAS['merge_base']}...{SHAS['head']}"], "", "fatal: bad revision", 128)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 1)
+        self.assertIn("git diff failed while taking the branch diff: fatal: bad revision", term.warned[0])
+
+    def test_shell_decodes_bytes(self):
+        sh = pc.Shell()
+        r = sh.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\x00b\\xff')"])
+        self.assertIn("\x00", r.stdout)
+        self.assertEqual(len(r.stdout), 4)
 
 
 if __name__ == "__main__":

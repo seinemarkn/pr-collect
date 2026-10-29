@@ -61,10 +61,13 @@ class Shell:
     def run(self, argv: list[str]) -> CommandResult:
         self.calls.append(list(argv))
         try:
-            done = subprocess.run(argv, capture_output=True, text=True, check=False)
+            done = subprocess.run(argv, capture_output=True, check=False)
         except FileNotFoundError:
             return CommandResult(list(argv), "", f"command not found: {argv[0]}", 127)
-        return CommandResult(list(argv), done.stdout, done.stderr, done.returncode)
+        return CommandResult(
+            list(argv), done.stdout.decode("utf-8", errors="replace"),
+            done.stderr.decode("utf-8", errors="replace"), done.returncode,
+        )
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
@@ -424,6 +427,10 @@ class Collected:
     logs: dict = field(default_factory=dict)
     deployments: list = field(default_factory=list)
     options_full_logs: bool = False
+    patch: str = ""
+    files: list = field(default_factory=list)
+    head_files: dict = field(default_factory=dict)
+    base_files: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1088,6 +1095,152 @@ def render_checks(c: Collected) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# The diff, the file list, the reconciliation, and the touched files whole.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileChange:
+    status: str  # added, modified, removed, renamed, copied, type changed
+    path: str  # the path at the head (the old path for a removed file)
+    old_path: str | None = None  # for a rename or copy
+    added: int | None = None  # None for a binary file
+    removed: int | None = None
+
+    @property
+    def at_head(self) -> bool:
+        return self.status != "removed"
+
+    @property
+    def at_base(self) -> bool:
+        return self.status not in ("added",)
+
+    @property
+    def base_path(self) -> str:
+        return self.old_path or self.path
+
+
+STATUS_WORDS = {"A": "added", "M": "modified", "D": "removed", "R": "renamed", "C": "copied", "T": "type changed"}
+
+
+def parse_name_status(text: str) -> list[FileChange]:
+    changes = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        code = parts[0][:1]
+        word = STATUS_WORDS.get(code, code.lower())
+        if code in ("R", "C") and len(parts) >= 3:
+            changes.append(FileChange(word, parts[2], parts[1]))
+        else:
+            changes.append(FileChange(word, parts[1]))
+    return changes
+
+
+def fetch_diff(ctx: Context, c: Collected) -> None:
+    rng = f"{c.merge_base}...{c.head_sha}"
+    c.patch = git_run(ctx, ["diff", "--no-color", "--no-ext-diff", rng], what="taking the branch diff")
+    c.files = parse_name_status(git_run(ctx, ["diff", "--name-status", "-M", rng], what="listing the changed files"))
+    stats = {st.path: st for st in parse_numstat(git_run(ctx, ["diff", "--numstat", "-M", rng], what="counting the changed lines"))}
+    for ch in c.files:
+        st = stats.get(ch.path)
+        if st:
+            ch.added, ch.removed = st.added, st.removed
+    c.counts["files"] = len(c.files)
+    reconcile(ctx, c)
+    ctx.terminal.say(f"diff                {len(c.files)} files, +{sum(f.added or 0 for f in c.files)} -{sum(f.removed or 0 for f in c.files)}")
+
+
+def reconcile(ctx: Context, c: Collected) -> None:
+    """The git diff against the pull request's own file list and size; a difference is
+    said, so a stale or wrong diff never passes as a capture."""
+    listed = gh_api(ctx, c.repo, f"repos/{c.repo.full_name}/pulls/{c.number}/files", optional=True)
+    if not isinstance(listed, list):
+        return
+    git_paths = sorted(f.path for f in c.files)
+    gh_paths = sorted(f.get("filename", "") for f in listed)
+    git_added = sum(f.added or 0 for f in c.files)
+    git_removed = sum(f.removed or 0 for f in c.files)
+    gh_added = sum(int(f.get("additions") or 0) for f in listed)
+    gh_removed = sum(int(f.get("deletions") or 0) for f in listed)
+    problems = []
+    if git_paths != gh_paths:
+        only_git = sorted(set(git_paths) - set(gh_paths))
+        only_gh = sorted(set(gh_paths) - set(git_paths))
+        if only_git:
+            problems.append(f"in the git diff but not on GitHub: {', '.join(only_git)}")
+        if only_gh:
+            problems.append(f"on GitHub but not in the git diff: {', '.join(only_gh)}")
+    if (git_added, git_removed) != (gh_added, gh_removed):
+        problems.append(f"git counts +{git_added} -{git_removed}, GitHub +{gh_added} -{gh_removed}")
+    if problems:
+        note = "The diff does NOT reconcile with GitHub's file list: " + "; ".join(problems) + ". Check the fetch and run again before trusting it."
+        ctx.notes.append(note)
+        ctx.terminal.warn(note)
+    else:
+        ctx.notes.append(f"The diff reconciles with GitHub's file list: {len(c.files)} files, +{git_added} -{git_removed}.")
+
+
+def file_at(ctx: Context, sha: str, path: str) -> str | None:
+    """A file's text at a commit; None when git cannot show it."""
+    r = ctx.shell.run(["git", "show", f"{sha}:{path}"])
+    if not r.ok:
+        ctx.missing.append(f"{path} at {short(sha)}: {r.stderr.strip() or 'git show failed'}")
+        return None
+    return r.stdout
+
+
+def fetch_files(ctx: Context, c: Collected) -> None:
+    for ch in c.files:
+        if ch.at_head:
+            c.head_files[ch.path] = file_at(ctx, c.head_sha, ch.path)
+        if ch.at_base:
+            c.base_files[ch.base_path] = file_at(ctx, c.merge_base, ch.base_path)
+    ctx.terminal.say(f"files               {len(c.head_files)} at the head, {len(c.base_files)} at the base")
+
+
+def change_label(ch: FileChange) -> str:
+    where = f"{ch.old_path} -> {ch.path}" if ch.old_path else ch.path
+    if ch.added is None and ch.removed is None:
+        return f"{ch.status}, binary: {where}"
+    return f"{ch.status} (+{ch.added or 0} -{ch.removed or 0}): {where}"
+
+
+def render_file_list(c: Collected) -> str:
+    if not c.files:
+        return "No files changed.\n"
+    return "\n".join(f"- {change_label(ch)}" for ch in c.files) + "\n"
+
+
+def render_diff(c: Collected) -> str:
+    intro = f"`git diff {c.merge_base}...{c.head_sha}`, {len(c.patch.splitlines())} lines.\n\n"
+    if not c.patch.strip():
+        return intro + "(empty)\n"
+    return intro + fenced(c.patch, "diff")
+
+
+def render_files(files: dict[str, str | None], sha: str, label: str) -> str:
+    if not files:
+        return f"No files {label}.\n"
+    out = [f"Every touched file whole {label}, at {sha}.", ""]
+    for path in sorted(files):
+        text = files[path]
+        out.append(f"## {path}")
+        out.append("")
+        if text is None:
+            out.append("(not readable; see the header)")
+        elif "\x00" in text:
+            out.append(f"(binary, {len(text)} bytes, not inlined)")
+        else:
+            out.append(f"{len(text.splitlines())} lines.")
+            out.append("")
+            out.append(fenced(text))
+        out.append("")
+    return "\n".join(out)
+
+
 # ==== cli ====
 
 
@@ -1142,12 +1295,21 @@ def collect(ctx: Context) -> Path:
     fetch_conversation(ctx, c)
     fetch_commits(ctx, c)
     fetch_checks(ctx, c)
+    fetch_diff(ctx, c)
+    if ctx.options.no_files:
+        ctx.notes.append("The touched files were left out (--no-files).")
+    else:
+        fetch_files(ctx, c)
     sections = [
         Section("Pull request", render_pull_request(c)),
         Section("Conversation", render_conversation(c)),
         Section("Commits", render_commits(c)),
         Section("Checks", render_checks(c)),
+        Section("Diff", render_file_list(c) + "\n" + render_diff(c)),
     ]
+    if not ctx.options.no_files:
+        sections.append(Section("Files at head", render_files(c.head_files, c.head_sha, "at the head")))
+        sections.append(Section("Files at base", render_files(c.base_files, c.merge_base, "at the base (the merge base)")))
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]
     sections.insert(0, Section("Header", render_header(ctx, c, names)))

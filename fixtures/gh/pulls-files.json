@@ -1,0 +1,58 @@
+[
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "docs/diagram.png",
+    "status": "added",
+    "additions": 0,
+    "deletions": 0,
+    "changes": 0,
+    "blob_url": "https://github.com/example/widgets/blob/22abb9a877c8810578042c25ccf0b591950f23f8/docs/diagram.png",
+    "raw_url": "",
+    "contents_url": ""
+  },
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "docs/filtering.md",
+    "status": "renamed",
+    "additions": 8,
+    "deletions": 0,
+    "changes": 8,
+    "blob_url": "https://github.com/example/widgets/blob/22abb9a877c8810578042c25ccf0b591950f23f8/docs/filtering.md",
+    "raw_url": "",
+    "contents_url": "",
+    "previous_filename": "docs/usage.md"
+  },
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "lib/widgets/catalog.py",
+    "status": "modified",
+    "additions": 9,
+    "deletions": 0,
+    "changes": 9,
+    "blob_url": "https://github.com/example/widgets/blob/22abb9a877c8810578042c25ccf0b591950f23f8/lib/widgets/catalog.py",
+    "raw_url": "",
+    "contents_url": ""
+  },
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "lib/widgets/filter.py",
+    "status": "added",
+    "additions": 15,
+    "deletions": 0,
+    "changes": 15,
+    "blob_url": "https://github.com/example/widgets/blob/22abb9a877c8810578042c25ccf0b591950f23f8/lib/widgets/filter.py",
+    "raw_url": "",
+    "contents_url": ""
+  },
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "tests/test_catalog.py",
+    "status": "modified",
+    "additions": 9,
+    "deletions": 0,
+    "changes": 9,
+    "blob_url": "https://github.com/example/widgets/blob/22abb9a877c8810578042c25ccf0b591950f23f8/tests/test_catalog.py",
+    "raw_url": "",
+    "contents_url": ""
+  }
+]
