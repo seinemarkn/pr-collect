@@ -368,27 +368,27 @@ class TestReadTicket(unittest.TestCase):
             ("GLOB-10680-fingerprint-status", 10680, "GLOB-10680"),
             ("feature/ABC-77-small-thing", 77, "ABC-77"),
             ("2026-10-29-X9-5000-dated", 5000, "X9-5000"),
-            ("fix-500-error-PROJ-10800-rapback", 10800, "PROJ-10800"),
+            ("fix-500-error-PROJ-10800-gadget", 10800, "PROJ-10800"),
         ]:
             t = pc.read_ticket(branch, "branch name")
             self.assertEqual((t.number, t.key), (number, key), branch)
             self.assertIn("as the key", t.source)
 
     def test_first_run_of_digits_over_100(self):
-        t = pc.read_ticket("10800-rapback-subscribed-ui-update", "branch name")
+        t = pc.read_ticket("10800-gadget-subscribed-ui-update", "branch name")
         self.assertEqual((t.number, t.key), (10800, None))
         self.assertIn("greater than 100", t.source)
         self.assertEqual(pc.read_ticket("v2-fix-7-things-then-4321", "branch name").number, 4321)
-        self.assertEqual(pc.read_ticket("fix-500-error-10800-rapback", "branch name").number, 500)
+        self.assertEqual(pc.read_ticket("fix-500-error-10800-gadget", "branch name").number, 500)
 
     def test_nothing(self):
-        self.assertIsNone(pc.read_ticket("rapback-ui-fixes", "branch name"))
+        self.assertIsNone(pc.read_ticket("gadget-ui-fixes", "branch name"))
         self.assertIsNone(pc.read_ticket("v2-fix-100-things", "branch name"))
         self.assertIsNone(pc.read_ticket("feature/abc-77-lower-case-is-not-a-key", "branch name"))
         self.assertIsNone(pc.read_ticket("", "branch name"))
 
     def test_explain_branch(self):
-        self.assertIn("no digits", pc.explain_branch("rapback-ui-fixes"))
+        self.assertIn("no digits", pc.explain_branch("gadget-ui-fixes"))
         self.assertIn("greater than 100", pc.explain_branch("v2-fix-7"))
 
     def test_ticket_from_answer(self):
@@ -410,52 +410,52 @@ class TestIdentifyTicket(unittest.TestCase):
         return ticket, term, ctx
 
     def test_t_option_wins_and_asks_nothing(self):
-        ticket, term, _ = self.run_it("rapback-ui-fixes", ticket="10800")
+        ticket, term, _ = self.run_it("gadget-ui-fixes", ticket="10800")
         self.assertEqual(ticket.label, "10800")
         self.assertEqual(term.asked, [])
         self.assertIn("from the -t option", term.said[0])
 
     def test_confirmed_yes(self):
         for answer in ("", "y", "Yes"):
-            ticket, term, _ = self.run_it("10800-rapback", [answer])
+            ticket, term, _ = self.run_it("10800-gadget", [answer])
             self.assertEqual(ticket.number, 10800)
             self.assertEqual(len(term.asked), 1)
             self.assertIn("Is ticket 10800 correct?", term.asked[0])
 
     def test_confirmed_no_then_typed(self):
-        ticket, term, _ = self.run_it("fix-500-error-10800-rapback", ["n", "10800"])
+        ticket, term, _ = self.run_it("fix-500-error-10800-gadget", ["n", "10800"])
         self.assertEqual(ticket.number, 10800)
         self.assertEqual(len(term.asked), 2)
 
     def test_typed_straight_at_the_confirmation(self):
-        ticket, term, _ = self.run_it("fix-500-error-10800-rapback", ["PROJ-10800"])
+        ticket, term, _ = self.run_it("fix-500-error-10800-gadget", ["PROJ-10800"])
         self.assertEqual(ticket.label, "PROJ-10800")
 
     def test_no_then_empty_stops(self):
         with self.assertRaises(pc.CollectError) as cm:
-            self.run_it("10800-rapback", ["no", ""])
+            self.run_it("10800-gadget", ["no", ""])
         self.assertIn("no ticket number given", str(cm.exception))
 
     def test_yes_option_skips_the_question(self):
-        ticket, term, ctx = self.run_it("10800-rapback", yes=True)
+        ticket, term, ctx = self.run_it("10800-gadget", yes=True)
         self.assertEqual(term.asked, [])
         self.assertEqual(ctx.notes, [])
 
     def test_not_interactive_takes_it_and_notes(self):
-        ticket, term, ctx = self.run_it("10800-rapback", interactive=False)
+        ticket, term, ctx = self.run_it("10800-gadget", interactive=False)
         self.assertEqual(ticket.number, 10800)
         self.assertEqual(len(ctx.notes), 1)
         self.assertIn("without confirmation", ctx.notes[0])
 
     def test_no_ticket_in_branch_then_prompt(self):
-        ticket, term, _ = self.run_it("rapback-ui-fixes", ["10800"])
+        ticket, term, _ = self.run_it("gadget-ui-fixes", ["10800"])
         self.assertEqual(ticket.number, 10800)
         self.assertIn("has no digits", term.warned[0])
         self.assertIn("Ticket number", term.asked[0])
 
     def test_no_ticket_in_branch_empty_answer_stops(self):
         with self.assertRaises(pc.CollectError) as cm:
-            self.run_it("rapback-ui-fixes", [""])
+            self.run_it("gadget-ui-fixes", [""])
         self.assertIn("No ticket number given", str(cm.exception))
 
     def test_no_ticket_in_branch_not_interactive_stops(self):
@@ -1361,6 +1361,42 @@ class TestRelatedAndRedact(unittest.TestCase):
         code, term, ctx = run_tool(self.root, yes=True, redact=["("])
         self.assertEqual(code, 1)
         self.assertIn("--redact '(' is not a valid pattern", term.warned[0])
+
+
+class TestDocumentation(unittest.TestCase):
+    def test_readme_and_format_describe_the_tool(self):
+        readme = (HERE / "README.md").read_text()
+        for piece in ("## Setup", "## Usage", "### Options", "### The ticket number", "pr-data.txt", "PR-DATA-FORMAT.md",
+                      "--yes", "--no-files", "--full-logs", "--related", "--redact", "Python 3.11"):
+            self.assertIn(piece, readme, piece)
+        spec = (HERE / "PR-DATA-FORMAT.md").read_text()
+        for name in pc.SECTION_ORDER:
+            self.assertIn(f"# pr-data: {name}", spec)
+        self.assertIn("Review thread", spec)
+
+    def test_no_forbidden_words_in_this_folder(self):
+        """A list of words that must not appear anywhere in this folder is kept outside
+        it; point PR_COLLECT_FORBIDDEN_WORDS at that file to run the check."""
+        listed = os.environ.get("PR_COLLECT_FORBIDDEN_WORDS")
+        if not listed:
+            self.skipTest("PR_COLLECT_FORBIDDEN_WORDS is not set")
+        words = [w.strip() for w in Path(listed).read_text().splitlines() if w.strip() and not w.startswith("#")]
+        hits = []
+        for path in HERE.rglob("*"):
+            parts = path.relative_to(HERE).parts
+            if not path.is_file() or parts[0] in (".git", "__pycache__", ".coverage", "htmlcov"):
+                continue
+            name = "/".join(parts)
+            text = path.read_bytes().decode("utf-8", errors="replace")
+            for w in words:
+                rx = re.escape(w)
+                if w[0].isalnum():
+                    rx = r"\b" + rx
+                if w[-1].isalnum():
+                    rx = rx + r"\b"
+                if re.search(rx, text, re.IGNORECASE) or re.search(rx, name, re.IGNORECASE):
+                    hits.append((name, w))
+        self.assertEqual(hits, [])
 
 
 if __name__ == "__main__":
