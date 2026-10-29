@@ -1,0 +1,10 @@
+# Python bytecode — regenerated on every run
+__pycache__/
+*.pyc
+
+# Coverage measurement output
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
