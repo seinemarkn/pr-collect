@@ -1,0 +1,85 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 6001,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-03-04T15:01:00Z",
+      "completed_at": "2026-03-04T15:01:42Z",
+      "html_url": "https://github.com/example/widgets/actions/runs/5001/job/6001",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run lint",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "id": 6002,
+      "name": "tests",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-03-04T15:01:00Z",
+      "completed_at": "2026-03-04T15:02:03Z",
+      "html_url": "https://github.com/example/widgets/actions/runs/5001/job/6002",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Install",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run tests",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 3
+        },
+        {
+          "name": "Upload report",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 4
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        }
+      ]
+    },
+    {
+      "id": 6003,
+      "name": "docs",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-03-04T15:01:00Z",
+      "completed_at": "2026-03-04T15:01:01Z",
+      "html_url": "https://github.com/example/widgets/actions/runs/5001/job/6003",
+      "steps": []
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "total_count": 1,
+  "workflow_runs": [
+    {
+      "id": 5001,
+      "name": "CI",
+      "run_number": 17,
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/example/widgets/actions/runs/5001",
+      "created_at": "2026-03-04T15:00:30Z",
+      "updated_at": "2026-03-04T15:02:05Z",
+      "head_sha": "22abb9a877c8810578042c25ccf0b591950f23f8",
+      "path": ".github/workflows/ci.yml"
+    }
+  ]
+}

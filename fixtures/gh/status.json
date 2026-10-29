@@ -1,0 +1,15 @@
+{
+  "state": "failure",
+  "sha": "22abb9a877c8810578042c25ccf0b591950f23f8",
+  "total_count": 1,
+  "statuses": [
+    {
+      "context": "ci/coverage",
+      "state": "success",
+      "description": "Coverage 94% (+1%)",
+      "target_url": "https://coverage.example.com/widgets/42",
+      "created_at": "2026-03-04T15:02:10Z",
+      "updated_at": "2026-03-04T15:02:10Z"
+    }
+  ]
+}

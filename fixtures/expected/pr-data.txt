@@ -5,9 +5,10 @@
 - **Branch:** DEMO-123-add-widget-filter into main
 - **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** 5971d32b31e861e454e64b13bcebc308cfff6c9a · **Merge base:** 8c25148139b155302e64998def3fc5cf6fdc80cf
 - **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
-- **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits
-- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits
-- **Requests to GitHub:** 9
+- **Checks:** 1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); 1 in progress (build / image); not deployed
+- **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits, 1 failed jobs
+- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits · 5. Checks
+- **Requests to GitHub:** 16
 
 # pr-data: Pull request
 
@@ -172,3 +173,250 @@ Full sha: 22abb9a877c8810578042c25ccf0b591950f23f8
 Document filtering; rename the usage page
 
 Files: docs/diagram.png (binary), docs/filtering.md (+8 -0)
+
+# pr-data: Checks
+
+Status at 22abb9a877: 1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); 1 in progress (build / image); not deployed
+
+## Check runs
+
+- PASS lint · GitHub Actions · success · 42s · https://github.com/example/widgets/actions/runs/5001/job/6001
+- FAIL tests · GitHub Actions · failure · 1m 3s · 1 test failed · https://github.com/example/widgets/actions/runs/5001/job/6002
+- SKIP docs · GitHub Actions · skipped · 1s · https://github.com/example/widgets/actions/runs/5001/job/6003
+- .... build / image · Example CI · in progress since 2026-03-04T15:05:00Z · https://ci.example.com/build/88
+
+## Commit statuses
+
+- PASS ci/coverage · success · Coverage 94% (+1%) · https://coverage.example.com/widgets/42
+
+## Actions runs
+
+### CI run #17 (push) · failure · https://github.com/example/widgets/actions/runs/5001
+
+- PASS job lint · success · 42s
+  - PASS 1. Set up job · success
+  - PASS 2. Run lint · success
+  - PASS 3. Complete job · success
+- FAIL job tests · failure · 1m 3s
+  - PASS 1. Set up job · success
+  - PASS 2. Install · success
+  - FAIL 3. Run tests · failure
+  - SKIP 4. Upload report · skipped
+  - PASS 5. Complete job · success
+  - Annotations:
+    - failure tests/test_catalog.py:22 test_filtered_by_size: AssertionError: Lists differ: ['gear', 'spring'] != ['gear']
+    - warning .github:1 Node 16 actions are deprecated.
+
+  Log of step "Run tests" (last 200 of 229 lines):
+
+```
+2026-03-04T15:01:30.030Z collected test 30
+2026-03-04T15:01:31.031Z collected test 31
+2026-03-04T15:01:32.032Z collected test 32
+2026-03-04T15:01:33.033Z collected test 33
+2026-03-04T15:01:34.034Z collected test 34
+2026-03-04T15:01:35.035Z collected test 35
+2026-03-04T15:01:36.036Z collected test 36
+2026-03-04T15:01:37.037Z collected test 37
+2026-03-04T15:01:38.038Z collected test 38
+2026-03-04T15:01:39.039Z collected test 39
+2026-03-04T15:01:40.040Z collected test 40
+2026-03-04T15:01:41.041Z collected test 41
+2026-03-04T15:01:42.042Z collected test 42
+2026-03-04T15:01:43.043Z collected test 43
+2026-03-04T15:01:44.044Z collected test 44
+2026-03-04T15:01:45.045Z collected test 45
+2026-03-04T15:01:46.046Z collected test 46
+2026-03-04T15:01:47.047Z collected test 47
+2026-03-04T15:01:48.048Z collected test 48
+2026-03-04T15:01:49.049Z collected test 49
+2026-03-04T15:01:50.050Z collected test 50
+2026-03-04T15:01:51.051Z collected test 51
+2026-03-04T15:01:52.052Z collected test 52
+2026-03-04T15:01:53.053Z collected test 53
+2026-03-04T15:01:54.054Z collected test 54
+2026-03-04T15:01:55.055Z collected test 55
+2026-03-04T15:01:56.056Z collected test 56
+2026-03-04T15:01:57.057Z collected test 57
+2026-03-04T15:01:58.058Z collected test 58
+2026-03-04T15:01:59.059Z collected test 59
+2026-03-04T15:01:00.060Z collected test 60
+2026-03-04T15:01:01.061Z collected test 61
+2026-03-04T15:01:02.062Z collected test 62
+2026-03-04T15:01:03.063Z collected test 63
+2026-03-04T15:01:04.064Z collected test 64
+2026-03-04T15:01:05.065Z collected test 65
+2026-03-04T15:01:06.066Z collected test 66
+2026-03-04T15:01:07.067Z collected test 67
+2026-03-04T15:01:08.068Z collected test 68
+2026-03-04T15:01:09.069Z collected test 69
+2026-03-04T15:01:10.070Z collected test 70
+2026-03-04T15:01:11.071Z collected test 71
+2026-03-04T15:01:12.072Z collected test 72
+2026-03-04T15:01:13.073Z collected test 73
+2026-03-04T15:01:14.074Z collected test 74
+2026-03-04T15:01:15.075Z collected test 75
+2026-03-04T15:01:16.076Z collected test 76
+2026-03-04T15:01:17.077Z collected test 77
+2026-03-04T15:01:18.078Z collected test 78
+2026-03-04T15:01:19.079Z collected test 79
+2026-03-04T15:01:20.080Z collected test 80
+2026-03-04T15:01:21.081Z collected test 81
+2026-03-04T15:01:22.082Z collected test 82
+2026-03-04T15:01:23.083Z collected test 83
+2026-03-04T15:01:24.084Z collected test 84
+2026-03-04T15:01:25.085Z collected test 85
+2026-03-04T15:01:26.086Z collected test 86
+2026-03-04T15:01:27.087Z collected test 87
+2026-03-04T15:01:28.088Z collected test 88
+2026-03-04T15:01:29.089Z collected test 89
+2026-03-04T15:01:30.090Z collected test 90
+2026-03-04T15:01:31.091Z collected test 91
+2026-03-04T15:01:32.092Z collected test 92
+2026-03-04T15:01:33.093Z collected test 93
+2026-03-04T15:01:34.094Z collected test 94
+2026-03-04T15:01:35.095Z collected test 95
+2026-03-04T15:01:36.096Z collected test 96
+2026-03-04T15:01:37.097Z collected test 97
+2026-03-04T15:01:38.098Z collected test 98
+2026-03-04T15:01:39.099Z collected test 99
+2026-03-04T15:01:40.100Z collected test 100
+2026-03-04T15:01:41.101Z collected test 101
+2026-03-04T15:01:42.102Z collected test 102
+2026-03-04T15:01:43.103Z collected test 103
+2026-03-04T15:01:44.104Z collected test 104
+2026-03-04T15:01:45.105Z collected test 105
+2026-03-04T15:01:46.106Z collected test 106
+2026-03-04T15:01:47.107Z collected test 107
+2026-03-04T15:01:48.108Z collected test 108
+2026-03-04T15:01:49.109Z collected test 109
+2026-03-04T15:01:50.110Z collected test 110
+2026-03-04T15:01:51.111Z collected test 111
+2026-03-04T15:01:52.112Z collected test 112
+2026-03-04T15:01:53.113Z collected test 113
+2026-03-04T15:01:54.114Z collected test 114
+2026-03-04T15:01:55.115Z collected test 115
+2026-03-04T15:01:56.116Z collected test 116
+2026-03-04T15:01:57.117Z collected test 117
+2026-03-04T15:01:58.118Z collected test 118
+2026-03-04T15:01:59.119Z collected test 119
+2026-03-04T15:01:00.120Z collected test 120
+2026-03-04T15:01:01.121Z collected test 121
+2026-03-04T15:01:02.122Z collected test 122
+2026-03-04T15:01:03.123Z collected test 123
+2026-03-04T15:01:04.124Z collected test 124
+2026-03-04T15:01:05.125Z collected test 125
+2026-03-04T15:01:06.126Z collected test 126
+2026-03-04T15:01:07.127Z collected test 127
+2026-03-04T15:01:08.128Z collected test 128
+2026-03-04T15:01:09.129Z collected test 129
+2026-03-04T15:01:10.130Z collected test 130
+2026-03-04T15:01:11.131Z collected test 131
+2026-03-04T15:01:12.132Z collected test 132
+2026-03-04T15:01:13.133Z collected test 133
+2026-03-04T15:01:14.134Z collected test 134
+2026-03-04T15:01:15.135Z collected test 135
+2026-03-04T15:01:16.136Z collected test 136
+2026-03-04T15:01:17.137Z collected test 137
+2026-03-04T15:01:18.138Z collected test 138
+2026-03-04T15:01:19.139Z collected test 139
+2026-03-04T15:01:20.140Z collected test 140
+2026-03-04T15:01:21.141Z collected test 141
+2026-03-04T15:01:22.142Z collected test 142
+2026-03-04T15:01:23.143Z collected test 143
+2026-03-04T15:01:24.144Z collected test 144
+2026-03-04T15:01:25.145Z collected test 145
+2026-03-04T15:01:26.146Z collected test 146
+2026-03-04T15:01:27.147Z collected test 147
+2026-03-04T15:01:28.148Z collected test 148
+2026-03-04T15:01:29.149Z collected test 149
+2026-03-04T15:01:30.150Z collected test 150
+2026-03-04T15:01:31.151Z collected test 151
+2026-03-04T15:01:32.152Z collected test 152
+2026-03-04T15:01:33.153Z collected test 153
+2026-03-04T15:01:34.154Z collected test 154
+2026-03-04T15:01:35.155Z collected test 155
+2026-03-04T15:01:36.156Z collected test 156
+2026-03-04T15:01:37.157Z collected test 157
+2026-03-04T15:01:38.158Z collected test 158
+2026-03-04T15:01:39.159Z collected test 159
+2026-03-04T15:01:40.160Z collected test 160
+2026-03-04T15:01:41.161Z collected test 161
+2026-03-04T15:01:42.162Z collected test 162
+2026-03-04T15:01:43.163Z collected test 163
+2026-03-04T15:01:44.164Z collected test 164
+2026-03-04T15:01:45.165Z collected test 165
+2026-03-04T15:01:46.166Z collected test 166
+2026-03-04T15:01:47.167Z collected test 167
+2026-03-04T15:01:48.168Z collected test 168
+2026-03-04T15:01:49.169Z collected test 169
+2026-03-04T15:01:50.170Z collected test 170
+2026-03-04T15:01:51.171Z collected test 171
+2026-03-04T15:01:52.172Z collected test 172
+2026-03-04T15:01:53.173Z collected test 173
+2026-03-04T15:01:54.174Z collected test 174
+2026-03-04T15:01:55.175Z collected test 175
+2026-03-04T15:01:56.176Z collected test 176
+2026-03-04T15:01:57.177Z collected test 177
+2026-03-04T15:01:58.178Z collected test 178
+2026-03-04T15:01:59.179Z collected test 179
+2026-03-04T15:01:00.180Z collected test 180
+2026-03-04T15:01:01.181Z collected test 181
+2026-03-04T15:01:02.182Z collected test 182
+2026-03-04T15:01:03.183Z collected test 183
+2026-03-04T15:01:04.184Z collected test 184
+2026-03-04T15:01:05.185Z collected test 185
+2026-03-04T15:01:06.186Z collected test 186
+2026-03-04T15:01:07.187Z collected test 187
+2026-03-04T15:01:08.188Z collected test 188
+2026-03-04T15:01:09.189Z collected test 189
+2026-03-04T15:01:10.190Z collected test 190
+2026-03-04T15:01:11.191Z collected test 191
+2026-03-04T15:01:12.192Z collected test 192
+2026-03-04T15:01:13.193Z collected test 193
+2026-03-04T15:01:14.194Z collected test 194
+2026-03-04T15:01:15.195Z collected test 195
+2026-03-04T15:01:16.196Z collected test 196
+2026-03-04T15:01:17.197Z collected test 197
+2026-03-04T15:01:18.198Z collected test 198
+2026-03-04T15:01:19.199Z collected test 199
+2026-03-04T15:01:20.200Z collected test 200
+2026-03-04T15:01:21.201Z collected test 201
+2026-03-04T15:01:22.202Z collected test 202
+2026-03-04T15:01:23.203Z collected test 203
+2026-03-04T15:01:24.204Z collected test 204
+2026-03-04T15:01:25.205Z collected test 205
+2026-03-04T15:01:26.206Z collected test 206
+2026-03-04T15:01:27.207Z collected test 207
+2026-03-04T15:01:28.208Z collected test 208
+2026-03-04T15:01:29.209Z collected test 209
+2026-03-04T15:01:30.210Z collected test 210
+2026-03-04T15:01:31.211Z collected test 211
+2026-03-04T15:01:32.212Z collected test 212
+2026-03-04T15:01:33.213Z collected test 213
+2026-03-04T15:01:34.214Z collected test 214
+2026-03-04T15:01:35.215Z collected test 215
+2026-03-04T15:01:36.216Z collected test 216
+2026-03-04T15:01:37.217Z collected test 217
+2026-03-04T15:01:38.218Z collected test 218
+2026-03-04T15:01:39.219Z collected test 219
+2026-03-04T15:01:40.220Z collected test 220
+2026-03-04T15:02:01.000Z FAIL: test_filtered_by_size (tests.test_catalog.TestCatalog)
+2026-03-04T15:02:01.001Z Traceback (most recent call last):
+2026-03-04T15:02:01.002Z   File "tests/test_catalog.py", line 22, in test_filtered_by_size
+2026-03-04T15:02:01.003Z     self.assertEqual(Catalog().filtered(min_size=3).names(), ["gear", "spring"])
+2026-03-04T15:02:01.004Z AssertionError: Lists differ: ['gear', 'spring'] != ['gear']
+2026-03-04T15:02:01.005Z 
+2026-03-04T15:02:02.000Z Ran 7 tests in 0.012s
+2026-03-04T15:02:02.001Z FAILED (failures=1)
+2026-03-04T15:02:02.002Z ##[error]Process completed with exit code 1.
+```
+
+
+  Log of step "Upload report" (1 lines):
+
+```
+2026-03-04T15:02:02.500Z ##[warning]Skipped: the report was not written
+```
+
+- SKIP job docs · skipped · 1s

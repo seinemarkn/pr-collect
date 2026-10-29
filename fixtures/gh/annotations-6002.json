@@ -1,0 +1,18 @@
+[
+  {
+    "path": "tests/test_catalog.py",
+    "start_line": 22,
+    "end_line": 22,
+    "annotation_level": "failure",
+    "title": "test_filtered_by_size",
+    "message": "AssertionError: Lists differ: ['gear', 'spring'] != ['gear']"
+  },
+  {
+    "path": ".github",
+    "start_line": 1,
+    "end_line": 1,
+    "annotation_level": "warning",
+    "title": null,
+    "message": "Node 16 actions are deprecated."
+  }
+]

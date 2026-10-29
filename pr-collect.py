@@ -416,6 +416,14 @@ class Collected:
     events: list = field(default_factory=list)
     threads: list = field(default_factory=list)
     commits: list = field(default_factory=list)
+    check_runs: list = field(default_factory=list)
+    statuses: list = field(default_factory=list)
+    runs: list = field(default_factory=list)
+    jobs: dict = field(default_factory=dict)
+    annotations: dict = field(default_factory=dict)
+    logs: dict = field(default_factory=dict)
+    deployments: list = field(default_factory=list)
+    options_full_logs: bool = False
 
 
 @dataclass
@@ -888,6 +896,198 @@ def render_commits(c: Collected) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# The checks and the Actions runs, with the failing steps' logs.
+# ---------------------------------------------------------------------------
+
+LOG_TAIL = 200
+
+
+def parse_time(text: str | None) -> datetime | None:
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def duration(start: str | None, end: str | None) -> str:
+    a, b = parse_time(start), parse_time(end)
+    if not a or not b:
+        return ""
+    total = int((b - a).total_seconds())
+    minutes, seconds = divmod(max(total, 0), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    return f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+
+
+def outcome(item: dict) -> str:
+    """One word for a check run, status, run, job, or step: its conclusion, or its state
+    while it is still going."""
+    conclusion = item.get("conclusion")
+    if conclusion:
+        return str(conclusion).lower()
+    state = item.get("state") or item.get("status") or "unknown"
+    return str(state).lower().replace("_", " ")
+
+
+FAILING = {"failure", "timed_out", "timed out", "action_required", "action required", "error", "cancelled", "startup_failure", "startup failure"}
+SKIPPED = {"skipped", "neutral", "stale"}
+GOING = {"queued", "in progress", "pending", "waiting", "requested", "expected"}
+
+
+def mark(item: dict) -> str:
+    o = outcome(item)
+    if o == "success":
+        return "PASS"
+    if o in FAILING:
+        return "FAIL"
+    if o in SKIPPED:
+        return "SKIP"
+    if o in GOING:
+        return "...."
+    return o.upper()[:4].ljust(4)
+
+
+def parse_failed_log(text: str) -> dict[tuple[str, str], list[str]]:
+    """gh run view --log-failed writes `<job>\t<step>\t<line>`; group the lines by step."""
+    steps: dict[tuple[str, str], list[str]] = {}
+    for line in text.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        job, step, content = parts
+        steps.setdefault((job, step), []).append(content)
+    return steps
+
+
+def trim_log(lines: list[str], keep: int | None) -> tuple[list[str], str]:
+    """The last `keep` lines and a note; the whole log when it is shorter or keep is None."""
+    if keep is None or len(lines) <= keep:
+        return lines, f"{len(lines)} lines"
+    return lines[-keep:], f"last {keep} of {len(lines)} lines"
+
+
+def fetch_checks(ctx: Context, c: Collected) -> None:
+    base = f"repos/{c.repo.full_name}"
+    sha = c.head_sha
+    runs_doc = gh_api(ctx, c.repo, f"{base}/commits/{sha}/check-runs", optional=True) or {}
+    c.check_runs = runs_doc.get("check_runs") or []
+    status_doc = gh_api(ctx, c.repo, f"{base}/commits/{sha}/status", paginate=False, optional=True) or {}
+    c.statuses = status_doc.get("statuses") or []
+    wf_doc = gh_api(ctx, c.repo, f"{base}/actions/runs?head_sha={sha}", optional=True) or {}
+    c.runs = wf_doc.get("workflow_runs") or []
+    c.jobs = {}
+    c.annotations = {}
+    c.logs = {}
+    for run in c.runs:
+        jobs_doc = gh_api(ctx, c.repo, f"{base}/actions/runs/{run['id']}/jobs", optional=True) or {}
+        jobs = jobs_doc.get("jobs") or []
+        c.jobs[run["id"]] = jobs
+        failed = [j for j in jobs if outcome(j) in FAILING]
+        for job in failed:
+            c.annotations[job["id"]] = gh_api(ctx, c.repo, f"{base}/check-runs/{job['id']}/annotations", optional=True) or []
+        if failed:
+            r = gh_run(ctx, ["run", "view", str(run["id"]), "-R", f"{c.repo.host}/{c.repo.full_name}", "--log-failed"])
+            if r.ok:
+                c.logs[run["id"]] = parse_failed_log(r.stdout)
+            else:
+                ctx.missing.append(
+                    f"the failing-step logs of run {run.get('name', '?')} #{run.get('run_number', '?')} "
+                    f"(jobs {', '.join(j['name'] for j in failed)}): {r.stderr.strip() or 'gh run view failed'}"
+                )
+    deployments = gh_api(ctx, c.repo, f"{base}/deployments?sha={sha}", optional=True)
+    c.deployments = deployments if isinstance(deployments, list) else []
+    c.counts["failed_jobs"] = sum(1 for jobs in c.jobs.values() for j in jobs if outcome(j) in FAILING)
+    c.status_line = status_line(c)
+    ctx.terminal.say(f"checks              {c.status_line}")
+
+
+def status_line(c: Collected) -> str:
+    items = [(r.get("name") or "?", outcome(r)) for r in c.check_runs] + [(s.get("context") or "?", outcome(s)) for s in c.statuses]
+    if not items:
+        return "no checks reported at the head"
+    groups = {"failing": [], "successful": [], "skipped": [], "in progress": [], "other": []}
+    for name, o in items:
+        key = ("successful" if o == "success" else "failing" if o in FAILING else "skipped" if o in SKIPPED
+               else "in progress" if o in GOING else "other")
+        groups[key].append(name)
+    bits = [f"{len(names)} {key} ({', '.join(names)})" for key, names in groups.items() if names]
+    deployed = "deployed to " + ", ".join(sorted({d.get("environment") or "?" for d in c.deployments})) if c.deployments else "not deployed"
+    return "; ".join(bits) + f"; {deployed}"
+
+
+def render_checks(c: Collected) -> str:
+    out = [f"Status at {short(c.head_sha)}: {c.status_line}", ""]
+    out.append("## Check runs")
+    out.append("")
+    if not c.check_runs:
+        out.append("None.")
+    for r in c.check_runs:
+        app = (r.get("app") or {}).get("name") or "?"
+        line = f"- {mark(r)} {r.get('name')} · {app} · {outcome(r)}"
+        if r.get("status") != "completed" and r.get("started_at"):
+            line += f" since {r['started_at']}"
+        elif duration(r.get("started_at"), r.get("completed_at")):
+            line += f" · {duration(r.get('started_at'), r.get('completed_at'))}"
+        title = (r.get("output") or {}).get("title")
+        if title and title != r.get("name"):
+            line += f" · {title}"
+        if r.get("html_url"):
+            line += f" · {r['html_url']}"
+        out.append(line)
+    out += ["", "## Commit statuses", ""]
+    if not c.statuses:
+        out.append("None.")
+    for st in c.statuses:
+        line = f"- {mark(st)} {st.get('context')} · {outcome(st)}"
+        if st.get("description"):
+            line += f" · {st['description']}"
+        if st.get("target_url"):
+            line += f" · {st['target_url']}"
+        out.append(line)
+    out += ["", "## Actions runs", ""]
+    if not c.runs:
+        out.append("None.")
+    keep = None if c.options_full_logs else LOG_TAIL
+    for run in c.runs:
+        head = f"### {run.get('name')} run #{run.get('run_number')} ({run.get('event')}) · {outcome(run)}"
+        if run.get("status") != "completed" and run.get("created_at"):
+            head += f" since {run['created_at']}"
+        if run.get("html_url"):
+            head += f" · {run['html_url']}"
+        out += [head, ""]
+        for job in c.jobs.get(run["id"], []):
+            line = f"- {mark(job)} job {job.get('name')} · {outcome(job)}"
+            if duration(job.get("started_at"), job.get("completed_at")):
+                line += f" · {duration(job.get('started_at'), job.get('completed_at'))}"
+            out.append(line)
+            for step in job.get("steps") or []:
+                out.append(f"  - {mark(step)} {step.get('number')}. {step.get('name')} · {outcome(step)}")
+            if outcome(job) in FAILING:
+                notes = c.annotations.get(job["id"]) or []
+                if notes:
+                    out.append("  - Annotations:")
+                    for a in notes:
+                        where = f"{a.get('path')}:{a.get('start_line')}" if a.get("path") else ""
+                        title = f" {a['title']}:" if a.get("title") else ""
+                        out.append(f"    - {a.get('annotation_level', '')} {where}{title} {a.get('message', '')}".rstrip())
+                steps = c.logs.get(run["id"]) or {}
+                for (job_name, step_name), lines in steps.items():
+                    if job_name != job.get("name"):
+                        continue
+                    kept, note = trim_log(lines, keep)
+                    out.append("")
+                    out.append(f"  Log of step \"{step_name}\" ({note}):")
+                    out.append("")
+                    out.append(fenced("\n".join(kept), ""))
+        out.append("")
+    return "\n".join(out)
+
+
 # ==== cli ====
 
 
@@ -937,13 +1137,16 @@ def collect(ctx: Context) -> Path:
     me = gh_json(ctx, ["api", "user"], optional=True)
     c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
     ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")
+    c.options_full_logs = ctx.options.full_logs
     fetch_refs(ctx, c)
     fetch_conversation(ctx, c)
     fetch_commits(ctx, c)
+    fetch_checks(ctx, c)
     sections = [
         Section("Pull request", render_pull_request(c)),
         Section("Conversation", render_conversation(c)),
         Section("Commits", render_commits(c)),
+        Section("Checks", render_checks(c)),
     ]
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]

@@ -129,6 +129,13 @@ def fixture_shell(root: Path) -> FakeShell:
     sh.on(["git", "rev-parse", "refs/remotes/origin/main"], base + "\n")
     sh.on(["git", "merge-base", base, head], mb + "\n")
     sh.on(["git", "log", "--reverse", f"--format={pc.LOG_FORMAT}", "--numstat", "-M", f"{mb}..{head}"], fx("git", "log.txt"))
+    sh.on([*api, f"repos/example/widgets/commits/{head}/check-runs"], fx("gh", "check-runs.json"))
+    sh.on(["gh", "api", "--hostname", "github.com", f"repos/example/widgets/commits/{head}/status"], fx("gh", "status.json"))
+    sh.on([*api, f"repos/example/widgets/actions/runs?head_sha={head}"], fx("gh", "runs.json"))
+    sh.on([*api, "repos/example/widgets/actions/runs/5001/jobs"], fx("gh", "jobs-5001.json"))
+    sh.on([*api, "repos/example/widgets/check-runs/6002/annotations"], fx("gh", "annotations-6002.json"))
+    sh.on(["gh", "run", "view", "5001", "-R", REPO_ARG, "--log-failed"], fx("gh", "log-failed-5001.txt"))
+    sh.on([*api, f"repos/example/widgets/deployments?sha={head}"], fx("gh", "deployments.json"))
     return sh
 
 
@@ -891,6 +898,120 @@ class TestRefsAndCommits(unittest.TestCase):
         self.assertIn("Files: docs/diagram.png (binary), docs/filtering.md (+8 -0)", text)
         c.commits[0].files = []
         self.assertIn("Files: none", pc.render_commits(c))
+
+
+class TestChecks(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def section(self, text):
+        return text.split("# pr-data: Checks\n", 1)[1].split("\n# pr-data: ", 1)[0]
+
+    def test_helpers(self):
+        self.assertEqual(pc.duration("2026-03-04T15:01:00Z", "2026-03-04T15:01:42Z"), "42s")
+        self.assertEqual(pc.duration("2026-03-04T15:01:00Z", "2026-03-04T15:02:03Z"), "1m 3s")
+        self.assertEqual(pc.duration("2026-03-04T15:01:00Z", "2026-03-04T17:02:03Z"), "2h 1m 3s")
+        self.assertEqual(pc.duration("2026-03-04T15:01:00Z", "2026-03-04T15:00:00Z"), "0s")
+        self.assertEqual(pc.duration(None, "x"), "")
+        self.assertEqual(pc.duration("not a time", "2026-03-04T15:00:00Z"), "")
+        self.assertEqual(pc.outcome({"conclusion": "FAILURE"}), "failure")
+        self.assertEqual(pc.outcome({"status": "in_progress"}), "in progress")
+        self.assertEqual(pc.outcome({"state": "pending"}), "pending")
+        self.assertEqual(pc.outcome({}), "unknown")
+        self.assertEqual([pc.mark({"conclusion": c}) for c in ("success", "failure", "skipped", "neutral", "timed_out")], ["PASS", "FAIL", "SKIP", "SKIP", "FAIL"])
+        self.assertEqual(pc.mark({"status": "queued"}), "....")
+        self.assertEqual(pc.mark({"conclusion": "mystery"}), "MYST")
+        self.assertEqual(pc.mark({"conclusion": "ok"}), "OK  ")
+        self.assertEqual(pc.trim_log(["a", "b", "c"], 2), (["b", "c"], "last 2 of 3 lines"))
+        self.assertEqual(pc.trim_log(["a", "b"], 2), (["a", "b"], "2 lines"))
+        self.assertEqual(pc.trim_log(["a", "b", "c"], None), (["a", "b", "c"], "3 lines"))
+        steps = pc.parse_failed_log("j\ts\tone\nj\ts\ttwo\nj\tt\tthree\nbroken line\n")
+        self.assertEqual(steps, {("j", "s"): ["one", "two"], ("j", "t"): ["three"]})
+
+    def test_status_line_and_section(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        line = "1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); 1 in progress (build / image); not deployed"
+        self.assertIn(f"**Checks:** {line}", text)
+        self.assertIn("1 failed jobs", text)
+        sec = self.section(text)
+        for piece in [
+            f"Status at {SHAS['head'][:10]}: {line}",
+            "- PASS lint · GitHub Actions · success · 42s · https://github.com/example/widgets/actions/runs/5001/job/6001",
+            "- FAIL tests · GitHub Actions · failure · 1m 3s · 1 test failed · ",
+            "- SKIP docs · GitHub Actions · skipped · 1s",
+            "- .... build / image · Example CI · in progress since 2026-03-04T15:05:00Z · https://ci.example.com/build/88",
+            "- PASS ci/coverage · success · Coverage 94% (+1%) · https://coverage.example.com/widgets/42",
+            "### CI run #17 (push) · failure · https://github.com/example/widgets/actions/runs/5001",
+            "- PASS job lint · success · 42s\n  - PASS 1. Set up job · success",
+            "- FAIL job tests · failure · 1m 3s",
+            "  - FAIL 3. Run tests · failure",
+            "  - SKIP 4. Upload report · skipped",
+            "  - Annotations:\n    - failure tests/test_catalog.py:22 test_filtered_by_size: AssertionError: Lists differ: ['gear', 'spring'] != ['gear']\n    - warning .github:1 Node 16 actions are deprecated.",
+            "  Log of step \"Run tests\" (last 200 of 229 lines):",
+            "FAILED (failures=1)\n2026-03-04T15:02:02.002Z ##[error]Process completed with exit code 1.\n```",
+            "  Log of step \"Upload report\" (1 lines):",
+            "- SKIP job docs · skipped · 1s",
+        ]:
+            self.assertIn(piece, sec, piece)
+        self.assertNotIn("collected test 29\n", sec)
+        self.assertIn("collected test 30\n", sec)
+        self.assertTrue(any(l.startswith("checks              1 failing") for l in term.said))
+
+    def test_full_logs_keeps_everything(self):
+        code, term, ctx = run_tool(self.root, yes=True, full_logs=True)
+        sec = self.section((self.root / "pr-data.txt").read_text())
+        self.assertIn("Log of step \"Run tests\" (229 lines):", sec)
+        self.assertIn("collected test 1\n", sec)
+
+    def test_logs_out_of_reach_are_named(self):
+        sh = fixture_shell(self.root).on(["gh", "run", "view", "5001", "-R", REPO_ARG, "--log-failed"], "", "HTTP 403: Resource not accessible by integration", 1)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("- **Not collected:**\n  - the failing-step logs of run CI #17 (jobs tests): HTTP 403", text)
+        self.assertNotIn("Log of step", text)
+        self.assertIn("  - Annotations:", text)
+
+    def test_nothing_reported_and_deployed(self):
+        api = ["gh", "api", "--hostname", "github.com", "--paginate"]
+        head = SHAS["head"]
+        sh = fixture_shell(self.root)
+        sh.on([*api, f"repos/example/widgets/commits/{head}/check-runs"], "", "HTTP 500", 1)
+        sh.on(["gh", "api", "--hostname", "github.com", f"repos/example/widgets/commits/{head}/status"], '{"statuses": []}')
+        sh.on([*api, f"repos/example/widgets/actions/runs?head_sha={head}"], '{"workflow_runs": [{"id": 9, "name": "Nightly", "run_number": 2, "event": "schedule", "status": "in_progress", "conclusion": null, "created_at": "2026-03-04T15:30:00Z"}]}')
+        sh.on([*api, "repos/example/widgets/actions/runs/9/jobs"], '{"jobs": [{"id": 90, "name": "sleep", "status": "in_progress", "conclusion": null, "steps": [{"name": "Wait", "status": "in_progress", "conclusion": null, "number": 1}]}]}')
+        sh.on([*api, f"repos/example/widgets/deployments?sha={head}"], '[{"environment": "staging"}, {"environment": "staging"}]')
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("**Checks:** no checks reported at the head", text)
+        sec = self.section(text)
+        self.assertIn("## Check runs\n\nNone.", sec)
+        self.assertIn("## Commit statuses\n\nNone.", sec)
+        self.assertIn("### Nightly run #2 (schedule) · in progress since 2026-03-04T15:30:00Z\n\n- .... job sleep · in progress\n  - .... 1. Wait · in progress", sec)
+        self.assertIn("0 failed jobs", text)
+        self.assertIn("HTTP 500", ctx.missing[0])
+        c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME)
+        c.check_runs = [{"name": "x", "conclusion": "success"}]
+        c.deployments = [{"environment": "staging"}, {"environment": "prod"}]
+        self.assertEqual(pc.status_line(c), "1 successful (x); deployed to prod, staging")
+        c.check_runs = [{"name": "y", "conclusion": "mystery"}]
+        c.deployments = []
+        self.assertEqual(pc.status_line(c), "1 other (y); not deployed")
+        c.runs = []
+        self.assertIn("## Actions runs\n\nNone.", pc.render_checks(c))
+        c.runs = [{"id": 1, "name": "W", "run_number": 1, "event": "push", "conclusion": "failure", "status": "completed"}]
+        c.jobs = {1: [{"id": 10, "name": "a", "conclusion": "failure"}, {"id": 11, "name": "b", "conclusion": "failure"}]}
+        c.logs = {1: {("a", "s"): ["from a"], ("b", "s"): ["from b"]}}
+        text = pc.render_checks(c)
+        self.assertLess(text.index("from a"), text.index("from b"))
+        self.assertEqual(text.count("Log of step"), 2)
 
 
 if __name__ == "__main__":
