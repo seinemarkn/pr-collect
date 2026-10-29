@@ -7,7 +7,7 @@
 - **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
 - **Checks:** 1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); 1 in progress (build / image); not deployed
 - **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits, 1 failed jobs, 5 files changed
-- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits · 5. Checks · 6. Diff · 7. Files at head · 8. Files at base
+- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Diff · 8. Files at head · 9. Files at base
 - **Notes:**
   - The diff reconciles with GitHub's file list: 5 files, +41 -0.
 - **Requests to GitHub:** 17
@@ -88,7 +88,7 @@ The description is in the Pull request section.
 
 ## 2026-03-03T09:02:00Z · review thread
 
-**Review thread** on lib/widgets/catalog.py line 37 (new side) · resolved
+**Review thread** on lib/widgets/catalog.py line 38 (new side) · resolved
 
 **@reviewer-two** · 2026-03-03T09:02:00Z · https://github.com/example/widgets/pull/42#discussion_r8003
 > Building a new `Catalog` here means the default list is copied twice. Pass the filtered list straight in:
@@ -146,6 +146,167 @@ The description is in the Pull request section.
 ## 2026-03-04T16:09:00Z · @octo-dev changed the base branch
 
 ## 2026-03-04T16:10:00Z · @octo-dev: some_new_event
+
+# pr-data: Annotated diff
+
+Files changed:
+
+- added, binary: docs/diagram.png
+- renamed (+8 -0): docs/usage.md -> docs/filtering.md
+- modified (+9 -0): lib/widgets/catalog.py
+- added (+15 -0): lib/widgets/filter.py
+- modified (+9 -0): tests/test_catalog.py
+
+Every line carries its old-side and new-side line numbers; an added line has only a new one, a removed line only an old one. Review threads follow the line they were made on.
+
+## added, binary: docs/diagram.png
+
+(binary, no hunks)
+
+## renamed (+8 -0): docs/usage.md -> docs/filtering.md
+
+Hunk `@@ -11,3 +11,11 @@ catalog.largest()`:
+
+````
+    11     11   ```
+    12     12   
+    13     13   The default catalog holds four widgets.
+           14 + 
+           15 + ## Filtering
+           16 + 
+           17 + Narrow the catalog by colour or by a smallest size:
+           18 + 
+           19 + ```python
+           20 + catalog.filtered(colour="red").names()
+           21 + ```
+````
+
+## modified (+9 -0): lib/widgets/catalog.py
+
+Hunk `@@ -2,6 +2,8 @@`:
+
+```
+     2      2   
+     3      3   from dataclasses import dataclass
+```
+
+**Review thread** on lib/widgets/catalog.py line 3 (old side) · unresolved
+
+**@reviewer-one** · 2026-03-04T16:00:30Z · https://github.com/example/widgets/pull/42#discussion_r8006
+> Not from this change, but `dataclass` is imported and `Widget` could be a plain `NamedTuple`; a later clean-up.
+
+```
+     4      4   
+            5 + from lib.widgets.filter import filter_widgets
+            6 + 
+     5      7   
+     6      8   @dataclass(frozen=True)
+     7      9   class Widget:
+```
+
+Hunk `@@ -32,3 +34,10 @@ class Catalog:`:
+
+```
+    32     34   
+    33     35       def total_size(self):
+    34     36           return sum(w.size for w in self.widgets)
+           37 + 
+           38 +     def filtered(self, colour=None, min_size=None):
+```
+
+**Review thread** on lib/widgets/catalog.py line 38 (new side) · resolved
+
+**@reviewer-two** · 2026-03-03T09:02:00Z · https://github.com/example/widgets/pull/42#discussion_r8003
+> Building a new `Catalog` here means the default list is copied twice. Pass the filtered list straight in:
+>
+> *(suggested replacement for the line(s) commented on)*
+> ```suggestion
+>     def filtered(self, colour=None, min_size=None):
+>         return Catalog(filter_widgets(self.widgets, colour, min_size))
+> ```
+
+**@octo-dev** · 2026-03-03T10:20:00Z · https://github.com/example/widgets/pull/42#discussion_r8004
+> Taken, thanks.
+
+```
+           39 +         """A new catalog holding only the matching widgets."""
+           40 +         return Catalog(filter_widgets(self.widgets, colour=colour, min_size=min_size))
+           41 + 
+           42 +     def colours(self):
+           43 +         return sorted({w.colour for w in self.widgets})
+```
+
+## added (+15 -0): lib/widgets/filter.py
+
+Hunk `@@ -0,0 +1,15 @@`:
+
+```
+            1 + """Filtering a catalog by colour or size."""
+            2 + 
+            3 + MAX_SIZE = 10
+```
+
+**Review thread** on lib/widgets/filter.py line 3 (new side) · unresolved
+
+**@reviewer-two** · 2026-03-03T09:01:00Z · https://github.com/example/widgets/pull/42#discussion_r8001
+> `MAX_SIZE` is never read. Either use it in the size check or drop it; a constant nobody reads will confuse the next reader.
+
+**@octo-dev** · 2026-03-03T10:15:00Z · https://github.com/example/widgets/pull/42#discussion_r8002
+> It was meant for a later `max_size` option. I will drop it until that lands.
+
+```
+            4 + 
+            5 + 
+            6 + def filter_widgets(widgets, colour=None, min_size=None):
+            7 +     """The widgets matching every given condition, in their original order."""
+            8 +     chosen = []
+            9 +     for widget in widgets:
+           10 +         if colour is not None and widget.colour != colour:
+           11 +             continue
+           12 +         if min_size is not None and widget.size < min_size:
+           13 +             continue
+           14 +         chosen.append(widget)
+           15 +     return chosen
+```
+
+### Threads on lines not in this diff (outdated)
+
+Originally on line 7 at a72c8862aa: `"""The widgets matching every given condition, in their original order."""`
+
+**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved
+
+**@reviewer-two** · 2026-03-03T09:03:00Z · https://github.com/example/widgets/pull/42#discussion_r8007
+> The docstring said "all widgets" but the function filters; reworded?
+
+## modified (+9 -0): tests/test_catalog.py
+
+Hunk `@@ -16,6 +16,15 @@ class TestCatalog(unittest.TestCase):`:
+
+```
+    16     16       def test_empty(self):
+    17     17           self.assertEqual(Catalog([]).names(), [])
+    18     18   
+           19 +     def test_filtered_by_colour(self):
+           20 +         self.assertEqual(Catalog().filtered(colour="red").names(), ["bolt", "spring"])
+```
+
+**Review thread** on tests/test_catalog.py line 20 (new side) · unresolved
+
+**@reviewer-one** · 2026-03-04T16:00:00Z · https://github.com/example/widgets/pull/42#discussion_r8005
+> A case with both `colour` and `min_size` set would show the two conditions combine with *and*.
+
+```
+           21 + 
+           22 +     def test_filtered_by_size(self):
+           23 +         self.assertEqual(Catalog().filtered(min_size=3).names(), ["gear", "spring"])
+           24 + 
+           25 +     def test_colours(self):
+           26 +         self.assertEqual(Catalog().colours(), ["blue", "green", "red"])
+           27 + 
+    19     28   
+    20     29   if __name__ == "__main__":
+    21     30       unittest.main()
+```
 
 # pr-data: Commits
 
@@ -425,13 +586,7 @@ Status at 22abb9a877: 1 failing (tests); 2 successful (lint, ci/coverage); 1 ski
 
 # pr-data: Diff
 
-- added, binary: docs/diagram.png
-- renamed (+8 -0): docs/usage.md -> docs/filtering.md
-- modified (+9 -0): lib/widgets/catalog.py
-- added (+15 -0): lib/widgets/filter.py
-- modified (+9 -0): tests/test_catalog.py
-
-`git diff 8c25148139b155302e64998def3fc5cf6fdc80cf...22abb9a877c8810578042c25ccf0b591950f23f8`, 88 lines.
+`git diff 8c25148139b155302e64998def3fc5cf6fdc80cf...22abb9a877c8810578042c25ccf0b591950f23f8`, 88 lines, as git wrote it; the file list is at the top of the Annotated diff section.
 
 ````diff
 diff --git a/docs/diagram.png b/docs/diagram.png

@@ -1215,7 +1215,8 @@ def render_file_list(c: Collected) -> str:
 
 
 def render_diff(c: Collected) -> str:
-    intro = f"`git diff {c.merge_base}...{c.head_sha}`, {len(c.patch.splitlines())} lines.\n\n"
+    intro = (f"`git diff {c.merge_base}...{c.head_sha}`, {len(c.patch.splitlines())} lines, as git wrote it; "
+             "the file list is at the top of the Annotated diff section.\n\n")
     if not c.patch.strip():
         return intro + "(empty)\n"
     return intro + fenced(c.patch, "diff")
@@ -1239,6 +1240,199 @@ def render_files(files: dict[str, str | None], sha: str, label: str) -> str:
             out.append(fenced(text))
         out.append("")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# The annotated diff: the patch parsed, a gutter on every line, the threads at their lines.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DiffLine:
+    kind: str  # context, added, removed
+    old: int | None
+    new: int | None
+    text: str
+    note: str = ""  # "no newline at end of file"
+
+
+@dataclass
+class Hunk:
+    header: str
+    lines: list[DiffLine]
+
+
+@dataclass
+class DiffFile:
+    old_path: str
+    new_path: str
+    meta: list[str]
+    hunks: list[Hunk]
+    binary: bool = False
+
+    @property
+    def path(self) -> str:
+        return self.new_path if self.new_path != "/dev/null" else self.old_path
+
+
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+DIFF_GIT_RE = re.compile(r'^diff --git "?a/(.*?)"? "?b/(.*?)"?$')
+
+
+def parse_diff(patch: str) -> list[DiffFile]:
+    files: list[DiffFile] = []
+    current: DiffFile | None = None
+    hunk: Hunk | None = None
+    old = new = 0
+    rows = patch.split("\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    for raw in rows:
+        m = DIFF_GIT_RE.match(raw)
+        if m:
+            current = DiffFile(m.group(1), m.group(2), [raw], [])
+            files.append(current)
+            hunk = None
+            continue
+        if current is None:
+            continue
+        hm = HUNK_RE.match(raw)
+        if hm:
+            old, new = int(hm.group(1)), int(hm.group(3))
+            hunk = Hunk(raw, [])
+            current.hunks.append(hunk)
+            continue
+        if hunk is None:
+            current.meta.append(raw)
+            if raw.startswith("Binary files"):
+                current.binary = True
+            elif raw.startswith("--- ") and raw[4:] == "/dev/null":
+                current.old_path = "/dev/null"
+            elif raw.startswith("+++ ") and raw[4:] == "/dev/null":
+                current.new_path = "/dev/null"
+            continue
+        if raw.startswith("\\"):
+            if hunk.lines:
+                hunk.lines[-1].note = raw[2:].strip()
+            continue
+        if raw.startswith("+"):
+            hunk.lines.append(DiffLine("added", None, new, raw[1:]))
+            new += 1
+        elif raw.startswith("-"):
+            hunk.lines.append(DiffLine("removed", old, None, raw[1:]))
+            old += 1
+        elif raw.startswith(" ") or raw == "":
+            # a blank context line is " "; some tools strip it to "", which means the same
+            hunk.lines.append(DiffLine("context", old, new, raw[1:]))
+            old += 1
+            new += 1
+    return files
+
+
+def gutter(line: DiffLine) -> str:
+    marker = {"added": "+", "removed": "-"}.get(line.kind, " ")
+    o = "" if line.old is None else str(line.old)
+    n = "" if line.new is None else str(line.new)
+    text = f"{o:>6} {n:>6} {marker} {line.text}"
+    return text + (f"   \\ {line.note}" if line.note else "")
+
+
+def threads_by_file(threads: list[Thread]) -> dict[str, list[Thread]]:
+    by: dict[str, list[Thread]] = {}
+    for t in threads:
+        by.setdefault(t.path, []).append(t)
+    return by
+
+
+def line_matches(t: Thread, line: DiffLine) -> bool:
+    if t.line is None:
+        return False
+    return (t.side == "LEFT" and line.old == t.line) or (t.side != "LEFT" and line.new == t.line)
+
+
+def original_line_text(ctx: Context, t: Thread, cache: dict) -> str | None:
+    if not t.comments or not t.comments[0].original_commit or not t.original_line:
+        return None
+    sha = t.comments[0].original_commit
+    key = (sha, t.path)
+    if key not in cache:
+        cache[key] = file_at(ctx, sha, t.path)
+    text = cache[key]
+    if text is None:
+        return None
+    lines = text.split("\n")
+    return lines[t.original_line - 1] if 0 < t.original_line <= len(lines) else None
+
+
+def render_annotated_file(ctx: Context, df: DiffFile, change: FileChange | None, threads: list[Thread], cache: dict) -> str:
+    label = change_label(change) if change else df.path
+    out = [f"## {label}", ""]
+    if df.binary:
+        out.append("(binary, no hunks)")
+        out.append("")
+    placed: set[str] = set()
+    for h in df.hunks:
+        fence = fence_for("\n".join(gutter(l) for l in h.lines))
+        out.append(f"Hunk `{h.header}`:")
+        out.append("")
+        out.append(fence)
+        open_fence = True
+        for line in h.lines:
+            if not open_fence:
+                out.append(fence)
+                open_fence = True
+            out.append(gutter(line))
+            for t in threads:
+                if t.id not in placed and line_matches(t, line):
+                    placed.add(t.id)
+                    out.append(fence)
+                    open_fence = False
+                    out.append("")
+                    out.append(render_thread(t).rstrip())
+                    out.append("")
+        if open_fence:
+            out.append(fence)
+        out.append("")
+    rest = [t for t in threads if t.id not in placed]
+    if rest:
+        out.append("### Threads on lines not in this diff (outdated)")
+        out.append("")
+        for t in rest:
+            original = original_line_text(ctx, t, cache)
+            sha = t.comments[0].original_commit if t.comments else None
+            if original is not None:
+                out.append(f"Originally on line {t.original_line} at {short(sha)}: `{original.strip() or '(blank)'}`")
+            else:
+                out.append(f"Originally on line {t.original_line}; the line could not be read from {short(sha)}.")
+            out.append("")
+            out.append(render_thread(t).rstrip())
+            out.append("")
+    return "\n".join(out)
+
+
+def render_annotated_diff(ctx: Context, c: Collected) -> str:
+    out = ["Files changed:", "", render_file_list(c).rstrip(), "",
+           "Every line carries its old-side and new-side line numbers; an added line has only a new one, a removed line only an old one. "
+           "Review threads follow the line they were made on.", ""]
+    files = parse_diff(c.patch)
+    by_path = threads_by_file(c.threads)
+    changes = {ch.path: ch for ch in c.files}
+    cache: dict = {}
+    seen_paths: set[str] = set()
+    for df in files:
+        seen_paths.update({df.path, df.old_path})
+        threads = by_path.get(df.path, []) + ([] if df.old_path == df.path else by_path.get(df.old_path, []))
+        out.append(render_annotated_file(ctx, df, changes.get(df.path), threads, cache))
+    stray = [t for path, ts in by_path.items() if path not in seen_paths for t in ts]
+    if stray:
+        out.append("## Threads on files not in this diff")
+        out.append("")
+        for t in stray:
+            out.append(render_thread(t).rstrip())
+            out.append("")
+    if not files:
+        out.append("(no hunks: the diff is empty)")
+    return "\n".join(out) + "\n"
 
 
 # ==== cli ====
@@ -1303,9 +1497,10 @@ def collect(ctx: Context) -> Path:
     sections = [
         Section("Pull request", render_pull_request(c)),
         Section("Conversation", render_conversation(c)),
+        Section("Annotated diff", render_annotated_diff(ctx, c)),
         Section("Commits", render_commits(c)),
         Section("Checks", render_checks(c)),
-        Section("Diff", render_file_list(c) + "\n" + render_diff(c)),
+        Section("Diff", render_diff(c)),
     ]
     if not ctx.options.no_files:
         sections.append(Section("Files at head", render_files(c.head_files, c.head_sha, "at the head")))

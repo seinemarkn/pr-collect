@@ -137,6 +137,7 @@ def fixture_shell(root: Path) -> FakeShell:
     sh.on(["gh", "run", "view", "5001", "-R", REPO_ARG, "--log-failed"], fx("gh", "log-failed-5001.txt"))
     sh.on([*api, f"repos/example/widgets/deployments?sha={head}"], fx("gh", "deployments.json"))
     rng = f"{mb}...{head}"
+    sh.on(["git", "show", f"{SHAS['commits'][0]}:lib/widgets/filter.py"], fx("git", "show", "head", "lib", "widgets", "filter.py"))
     sh.on(["git", "diff", "--no-color", "--no-ext-diff", rng], fx("git", "diff.patch"))
     sh.on(["git", "diff", "--name-status", "-M", rng], fx("git", "name-status.txt"))
     sh.on(["git", "diff", "--numstat", "-M", rng], fx("git", "numstat.txt"))
@@ -804,7 +805,7 @@ class TestConversation(unittest.TestCase):
             "@octo-dev changed the base branch",
             "@octo-dev: some_new_event",
             "**Review thread** on lib/widgets/filter.py line 3 (new side) · unresolved",
-            "**Review thread** on lib/widgets/catalog.py line 37 (new side) · resolved",
+            "**Review thread** on lib/widgets/catalog.py line 38 (new side) · resolved",
             "**Review thread** on lib/widgets/catalog.py line 3 (old side) · unresolved",
             "**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved",
             "*(suggested replacement for the line(s) commented on)*\n> ```suggestion\n>     def filtered",
@@ -1056,8 +1057,8 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("5 files changed", text)
         self.assertIn("- **Notes:**\n  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
         diff = self.section(text, "Diff")
-        self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", diff)
-        self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines.", diff)
+        self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", self.section(text, "Annotated diff"))
+        self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines, as git wrote it", diff)
         self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
         self.assertIn("+    return chosen\n", diff)
         self.assertIn("     unittest.main()\n````", diff)
@@ -1075,7 +1076,7 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("## lib/widgets/catalog.py", base)
         self.assertTrue(any(l.startswith("diff                5 files, +41 -0") for l in term.said))
         self.assertTrue(any(l.startswith("files               5 at the head, 3 at the base") for l in term.said))
-        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Commits · 5. Checks · 6. Diff · 7. Files at head · 8. Files at base", text)
+        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Diff · 8. Files at head · 9. Files at base", text)
 
     def test_fenced_markdown_inside_markdown_survives(self):
         code, term, ctx = run_tool(self.root, yes=True)
@@ -1090,7 +1091,7 @@ class TestDiffAndFiles(unittest.TestCase):
         text = (self.root / "pr-data.txt").read_text()
         self.assertNotIn("# pr-data: Files at head", text)
         self.assertIn("The touched files were left out (--no-files).", text)
-        self.assertIn("· 6. Diff\n", text)
+        self.assertIn("· 7. Diff\n", text)
 
     def test_reconciliation_differences_are_said(self):
         sh = fixture_shell(self.root).on(["gh", "api", "--hostname", "github.com", "--paginate", "repos/example/widgets/pulls/42/files"],
@@ -1119,7 +1120,8 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("## lib/widgets/filter.py\n\n(not readable; see the header)", text)
         self.assertIn(f"lib/widgets/filter.py at {SHAS['head'][:10]}: fatal: path not in tree", text)
         c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="m", head_sha="h")
-        self.assertEqual(pc.render_diff(c), "`git diff m...h`, 0 lines.\n\n(empty)\n")
+        self.assertTrue(pc.render_diff(c).startswith("`git diff m...h`, 0 lines, as git wrote it"))
+        self.assertTrue(pc.render_diff(c).endswith("\n\n(empty)\n"))
         self.assertEqual(pc.render_file_list(c), "No files changed.\n")
         self.assertEqual(pc.render_files({}, "h", "at the head"), "No files at the head.\n")
         self.assertEqual(pc.change_label(pc.FileChange("modified", "a.py", None, 3, None)), "modified (+3 -0): a.py")
@@ -1135,6 +1137,105 @@ class TestDiffAndFiles(unittest.TestCase):
         r = sh.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\x00b\\xff')"])
         self.assertIn("\x00", r.stdout)
         self.assertEqual(len(r.stdout), 4)
+
+
+class TestAnnotatedDiff(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parse_diff_gutter_numbers_against_a_hand_count(self):
+        files = pc.parse_diff(fx("git", "diff.patch"))
+        self.assertEqual([f.path for f in files], ["docs/diagram.png", "docs/filtering.md", "lib/widgets/catalog.py", "lib/widgets/filter.py", "tests/test_catalog.py"])
+        png, docs, catalog, flt, tests = files
+        self.assertTrue(png.binary)
+        self.assertEqual(png.hunks, [])
+        self.assertEqual((docs.old_path, docs.new_path), ("docs/usage.md", "docs/filtering.md"))
+        self.assertEqual(len(catalog.hunks), 2)
+        h1, h2 = catalog.hunks
+        self.assertEqual(h1.header, "@@ -2,6 +2,8 @@")
+        self.assertEqual([(l.kind, l.old, l.new) for l in h1.lines], [
+            ("context", 2, 2), ("context", 3, 3), ("context", 4, 4), ("added", None, 5), ("added", None, 6),
+            ("context", 5, 7), ("context", 6, 8), ("context", 7, 9)])
+        self.assertEqual(h1.lines[3].text, "from lib.widgets.filter import filter_widgets")
+        self.assertEqual([(l.kind, l.old, l.new) for l in h2.lines][:5], [
+            ("context", 32, 34), ("context", 33, 35), ("context", 34, 36), ("added", None, 37), ("added", None, 38)])
+        self.assertEqual(h2.lines[4].text, "    def filtered(self, colour=None, min_size=None):")
+        self.assertEqual(flt.old_path, "/dev/null")
+        self.assertEqual([l.new for l in flt.hunks[0].lines][:3], [1, 2, 3])
+        self.assertEqual(flt.hunks[0].lines[2].text, "MAX_SIZE = 10")
+        self.assertEqual(tests.hunks[0].lines[4].new, 20)
+
+    def test_parse_diff_removed_lines_no_newline_and_junk(self):
+        patch = (
+            "junk before the first file\n"
+            "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n"
+            "@@ -1,3 +1,2 @@\n one\n-two\n-three\n+four\n\\ No newline at end of file\n"
+            "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n"
+        )
+        a, gone = pc.parse_diff(patch)
+        self.assertEqual([(l.kind, l.old, l.new, l.text) for l in a.hunks[0].lines], [
+            ("context", 1, 1, "one"), ("removed", 2, None, "two"), ("removed", 3, None, "three"), ("added", None, 2, "four")])
+        self.assertEqual(a.hunks[0].lines[-1].note, "No newline at end of file")
+        self.assertEqual(pc.gutter(a.hunks[0].lines[-1]), "            2 + four   \\ No newline at end of file")
+        self.assertEqual(pc.gutter(a.hunks[0].lines[1]), "     2        - two")
+        self.assertEqual(pc.gutter(a.hunks[0].lines[0]), "     1      1   one")
+        self.assertEqual(gone.new_path, "/dev/null")
+        self.assertEqual(gone.path, "gone.txt")
+        self.assertEqual(pc.parse_diff(""), [])
+        self.assertEqual(pc.parse_diff("@@ -1 +1 @@\n+x\n\\ stray\n"), [])
+        trailing = pc.parse_diff("diff --git a/t b/t\n--- a/t\n+++ b/t\n@@ -1 +1 @@\n-x\n+y\n")
+        self.assertEqual(len(trailing[0].hunks[0].lines), 2)
+        stripped = pc.parse_diff("diff --git a/t b/t\n--- a/t\n+++ b/t\n@@ -1,2 +1,2 @@\n\n-x\n+y\n")
+        self.assertEqual([(l.kind, l.old, l.new, l.text) for l in stripped[0].hunks[0].lines], [("context", 1, 1, ""), ("removed", 2, None, "x"), ("added", None, 2, "y")])
+
+    def test_section_places_every_thread(self):
+        code, term, ctx = run_tool(self.root, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        sec = text.split("# pr-data: Annotated diff\n", 1)[1].split("\n# pr-data: Commits", 1)[0]
+        self.assertTrue(sec.startswith("\nFiles changed:\n\n- added, binary: docs/diagram.png"))
+        self.assertIn("## added, binary: docs/diagram.png\n\n(binary, no hunks)", sec)
+        self.assertIn("## renamed (+8 -0): docs/usage.md -> docs/filtering.md\n\nHunk `@@ -11,3 +11,11 @@ catalog.largest()`:", sec)
+        # T1 on filter.py new line 3, right after the line, the fence closed and reopened
+        self.assertIn("            3 + MAX_SIZE = 10\n```\n\n**Review thread** on lib/widgets/filter.py line 3 (new side) · unresolved", sec)
+        self.assertIn("> It was meant for a later `max_size` option. I will drop it until that lands.\n\n```\n            4 + \n", sec)
+        # T4 on the old side of a context line, T2 in the second hunk
+        self.assertIn("     3      3   from dataclasses import dataclass\n```\n\n**Review thread** on lib/widgets/catalog.py line 3 (old side)", sec)
+        self.assertIn("           38 +     def filtered(self, colour=None, min_size=None):\n```\n\n**Review thread** on lib/widgets/catalog.py line 38 (new side) · resolved", sec)
+        # T3 in the tests, T5 outdated with its original line quoted
+        self.assertIn("           20 +         self.assertEqual(Catalog().filtered(colour=\"red\").names(), [\"bolt\", \"spring\"])\n```\n\n**Review thread** on tests/test_catalog.py line 20", sec)
+        self.assertIn("### Threads on lines not in this diff (outdated)\n\nOriginally on line 7 at " + SHAS["commits"][0][:10] + ": `\"\"\"The widgets matching every given condition, in their original order.\"\"\"`\n\n**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved", sec)
+        self.assertEqual(sec.count("**Review thread**"), 5)
+        self.assertNotIn("## Threads on files not in this diff", sec)
+        self.assertIn("file list is at the top of the Annotated diff section", text.split("# pr-data: Diff\n", 1)[1])
+
+    def test_stray_threads_unreadable_original_and_empty_diff(self):
+        sh = fixture_shell(self.root).on(["git", "show", f"{SHAS['commits'][0]}:lib/widgets/filter.py"], "", "fatal: gone", 128)
+        extra = fx("gh", "review-threads.json").replace('"path": "tests/test_catalog.py"', '"path": "lib/elsewhere.py"')
+        sh.on(graphql_argv(), extra)
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        sec = (self.root / "pr-data.txt").read_text().split("# pr-data: Annotated diff\n", 1)[1].split("\n# pr-data: Commits", 1)[0]
+        self.assertIn("Originally on line 7; the line could not be read from " + SHAS["commits"][0][:10] + ".", sec)
+        self.assertIn("## Threads on files not in this diff\n\n**Review thread** on lib/elsewhere.py line 20 (new side)", sec)
+        self.assertIn(f"lib/widgets/filter.py at {SHAS['commits'][0][:10]}: fatal: gone", ctx.missing[0])
+        c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="m", head_sha="h")
+        ctx2 = pc.Context(FakeShell(), FakeTerminal(), pc.Options())
+        self.assertIn("(no hunks: the diff is empty)", pc.render_annotated_diff(ctx2, c))
+        t = pc.Thread("x", "p", None, 999, None, "RIGHT", False, True, [pc.ThreadComment(1, "a", "b", "t", "", "abc")])
+        cache = {("abc", "p"): "one\ntwo\n"}
+        self.assertIsNone(pc.original_line_text(ctx2, t, cache))
+        t.original_line = 2
+        self.assertEqual(pc.original_line_text(ctx2, t, cache), "two")
+        t.comments = []
+        self.assertIsNone(pc.original_line_text(ctx2, t, cache))
+        self.assertFalse(pc.line_matches(pc.Thread("x", "p", None, 1, None, "RIGHT", False, True, []), pc.DiffLine("added", None, 1, "")))
+        blank = pc.Thread("x", "p", None, 1, None, "RIGHT", False, True, [pc.ThreadComment(1, "a", "b", "t", "", "abc")])
+        self.assertIn("`(blank)`", pc.render_annotated_file(ctx2, pc.DiffFile("p", "p", [], []), None, [blank], {("abc", "p"): "\n\n"}))
 
 
 if __name__ == "__main__":
