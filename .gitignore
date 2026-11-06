@@ -8,3 +8,7 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# Editor and tooling folders — nothing hidden belongs in the repository except .github
+.*/
+!.github/
