@@ -110,6 +110,7 @@ class Options:
     no_files: bool = False
     full_logs: bool = False
     plain_diff: bool = False
+    uses: bool = False
     related: bool = False
     redact: list[str] = field(default_factory=list)
 
@@ -436,6 +437,9 @@ class Collected:
     added_paths: list = field(default_factory=list)  # added by the pull request: whole in the annotated diff, not repeated
     removed_paths: list = field(default_factory=list)  # removed by it: likewise
     related_files: dict = field(default_factory=dict)
+    uses_names: list = field(default_factory=list)  # the identifiers the diff uses, looked for
+    uses_files: dict = field(default_factory=dict)  # path -> text, files at the head defining one of them
+    uses_defines: dict = field(default_factory=dict)  # path -> the names it defines
 
     @property
     def head_paths(self) -> set:
@@ -455,10 +459,11 @@ SECTION_ORDER = [
     "Checks", "Files at head", "Files at base",
 ]
 # Every section that can appear, in the order it appears: the eight above, plus "Diff"
-# (--plain-diff) between Checks and the files, and "Related files" (--related) last.
+# (--plain-diff) between Checks and the files, then "Files the diff uses" (--uses) and
+# "Related files" (--related) last.
 SECTION_ORDER_ALL = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Diff", "Files at head", "Files at base", "Related files",
+    "Checks", "Diff", "Files at head", "Files at base", "Files the diff uses", "Related files",
 ]
 
 
@@ -1264,19 +1269,25 @@ def render_files(files: dict[str, str | None], sha: str, label: str, skipped: li
         return "\n".join(out) + "\n"
     out += [f"Every {other}touched file whole {label}, at {sha}.", ""]
     for path in sorted(files):
-        text = files[path]
-        out.append(f"## {path}")
-        out.append("")
-        if text is None:
-            out.append("(not readable; see the header)")
-        elif "\x00" in text:
-            out.append(f"(binary, {len(text)} bytes, not inlined)")
-        else:
-            out.append(f"{len(text.splitlines())} lines.")
-            out.append("")
-            out.append(fenced(text))
-        out.append("")
+        out += file_block(path, files[path])
     return "\n".join(out)
+
+
+def file_block(path: str, text: str | None, extra: str | None = None) -> list[str]:
+    """One file in a files section: its heading, an optional line about it, and its text."""
+    out = [f"## {path}", ""]
+    if extra:
+        out += [extra, ""]
+    if text is None:
+        out.append("(not readable; see the header)")
+    elif "\x00" in text:
+        out.append(f"(binary, {len(text)} bytes, not inlined)")
+    else:
+        out.append(f"{len(text.splitlines())} lines.")
+        out.append("")
+        out.append(fenced(text))
+    out.append("")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1542,6 +1553,120 @@ def fetch_related(ctx: Context, c: Collected) -> None:
     ctx.terminal.say(f"related             {len(chosen)} files at the head")
 
 
+# ---------------------------------------------------------------------------
+# Files the diff uses (--uses): the files at the head that define what the added lines
+# name, the mirror of the related files.
+# ---------------------------------------------------------------------------
+
+USES_CAP = RELATED_CAP
+PROSE_SUFFIXES = (".md", ".markdown", ".txt", ".rst", ".adoc", ".html")
+STRING_OR_COMMENT_RE = re.compile(r'''"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|#.*$|//.*$''')
+USE_RES = [
+    re.compile(r"\b([A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*)\b"),  # a class or module: CamelCase
+    re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b"),  # a constant: ALL_CAPS
+    re.compile(r"\b[A-Z][A-Za-z0-9]*\.([a-z_][A-Za-z0-9_]*)"),  # a method on a class: Thing.method
+    re.compile(r"(?:create|build|create_list|build_list|attributes_for)\(\s*:([a-z_][a-z0-9_]*)"),  # a factory
+    re.compile(r"\.([a-z][a-z0-9]*_[a-z0-9_]+)"),  # a method with an underscore in its name
+    re.compile(r"(?<![.\w])([a-z][a-z0-9]*_[a-z0-9_]+)\("),  # a bare call with an underscore in its name
+]
+# Names that are the language's or a common framework's, never worth looking for.
+USE_STOP = {
+    "new", "where", "find", "find_by", "find_each", "first", "last", "all", "none", "count", "create", "build",
+    "update", "save", "destroy", "delete", "exists", "pluck", "select", "order", "limit", "joins", "includes",
+    "is_a", "to_not", "not_to", "and_return", "and_raise", "to_s", "to_i", "to_a", "to_h", "to_sym", "to_json",
+    "max_by", "min_by", "sort_by", "group_by", "each_with_index", "each_with_object", "load_tasks",
+    "frozen_string_literal", "rails_helper", "spec_helper", "__init__", "__main__", "__name__", "zone", "now",
+    "today", "yesterday", "tomorrow", "enable", "disable", "clear", "create_list", "build_list", "attributes_for",
+    "Time", "Date", "DateTime", "Rails", "RSpec", "Rake", "Flipper", "ActiveRecord", "ActiveSupport", "Hash",
+    "Array", "String", "Integer", "Float", "Object", "Class", "Module", "Kernel", "Struct", "Set", "Proc",
+    "Exception", "StandardError", "RuntimeError", "ArgumentError", "TypeError", "ValueError", "KeyError",
+    "True", "False", "None", "Math", "JSON", "Promise", "Error", "Number", "Boolean", "Symbol", "Map", "List", "Dict",
+}
+
+
+def identifiers_used(patch: str) -> list[str]:
+    """Names the diff's added lines use and do not define: classes and modules, constants,
+    methods called on a class, factories, and methods or functions with an underscore in
+    their name. Strings and comments are skipped."""
+    defined = set(identifiers_added(patch))
+    found: dict[str, None] = {}
+    for df in parse_diff(patch):
+        if df.path.lower().endswith(PROSE_SUFFIXES):
+            continue  # prose: every capitalised word would look like a class
+        for h in df.hunks:
+            for line in h.lines:
+                if line.kind != "added":
+                    continue
+                text = STRING_OR_COMMENT_RE.sub("", line.text)
+                for rx in USE_RES:
+                    for m in rx.finditer(text):
+                        name = m.group(1)
+                        if len(name) >= 3 and name not in defined and name not in USE_STOP:
+                            found.setdefault(name, None)
+    return list(found)
+
+
+def uses_grep_args(names: list[str]) -> list[str]:
+    """The git grep that finds a definition of any of the names at a commit: a class,
+    module, function, method, constant, scope, factory, or association by that name."""
+    alt = "(" + "|".join(re.escape(n) for n in names) + ")"
+    end = "([^A-Za-z0-9_]|$)"
+    sp = "[[:space:]]"
+    patterns = [
+        f"^{sp}*(def{sp}+(self\\.)?|(class|module|function|struct|enum|interface|type|const|let|var|val){sp}+){alt}{end}",
+        f"^{sp}*(scope|factory|has_many|has_one|belongs_to|attr_accessor|attr_reader|attr_writer|define_method){sp}+:{alt}{end}",
+    ]
+    upper = [n for n in names if n[0].isupper()]
+    if upper:
+        patterns.append(f"^{sp}*(" + "|".join(re.escape(n) for n in upper) + f"){sp}*=[^=]")
+    args = ["grep", "-I", "-E", "-n"]
+    for p in patterns:
+        args += ["-e", p]
+    return args
+
+
+def fetch_uses(ctx: Context, c: Collected) -> None:
+    names = identifiers_used(c.patch)
+    c.uses_names = names
+    if not names:
+        ctx.notes.append("Files the diff uses (--uses): the diff uses no identifier to look for.")
+        return
+    r = ctx.shell.run(["git", *uses_grep_args(names), c.head_sha])
+    if r.code not in (0, 1):
+        ctx.missing.append(f"files the diff uses (git grep): {r.stderr.strip() or 'failed'}")
+        return
+    name_res = {n: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(n) + r"(?![A-Za-z0-9_])") for n in names}
+    defines: dict[str, list[str]] = {}
+    for line in r.stdout.splitlines():
+        parts = line.split(":", 3)  # sha, path, line number, text
+        if len(parts) < 4:
+            continue
+        path, text = parts[1], parts[3]
+        if not path or path in c.head_paths:
+            continue
+        for n, rx in name_res.items():
+            if rx.search(text) and n not in defines.setdefault(path, []):
+                defines[path].append(n)
+    paths = [p for p in defines if defines[p]]
+    chosen = paths[:USES_CAP]
+    for path in chosen:
+        c.uses_files[path] = file_at(ctx, c.head_sha, path)
+        c.uses_defines[path] = defines[path]
+    note = f"Files the diff uses (--uses): looked for the definitions of {len(names)} identifiers; {len(paths)} files define one of them"
+    if len(paths) > USES_CAP:
+        note += f", the first {USES_CAP} included"
+    ctx.notes.append(note + ".")
+    ctx.terminal.say(f"uses                {len(chosen)} files at the head")
+
+
+def render_uses(c: Collected) -> str:
+    out = [f"Files at the head, at {c.head_sha}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. "
+           f"Looked for the definitions of {len(c.uses_names)} identifiers.", ""]
+    for path in sorted(c.uses_files):
+        out += file_block(path, c.uses_files[path], "Defines: " + ", ".join(c.uses_defines[path]) + ".")
+    return "\n".join(out)
+
+
 GUTTER_RE = re.compile(r"^(\s*\d*\s+\d*\s[ +-] )")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -1612,6 +1737,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
     parser.add_argument("--no-files", action="store_true", help="leave out the whole touched files at the head and at the base")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
     parser.add_argument("--plain-diff", action="store_true", help="add the branch diff a second time as git wrote it, for git apply")
+    parser.add_argument("--uses", action="store_true", help="add files at the head that define a class, constant, method, or factory the diff uses")
     parser.add_argument("--related", action="store_true", help="add files at the head that name an identifier the diff adds or changes")
     parser.add_argument("--redact", action="append", default=[], metavar="PATTERN",
                         help="a regular expression to replace with [REDACTED] everywhere but the header; may be repeated")
@@ -1619,7 +1745,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
     ns = parser.parse_args(argv)
     return Options(
         number=ns.number, ticket=ns.ticket, yes=ns.yes,
-        no_files=ns.no_files, full_logs=ns.full_logs, plain_diff=ns.plain_diff, related=ns.related, redact=list(ns.redact),
+        no_files=ns.no_files, full_logs=ns.full_logs, plain_diff=ns.plain_diff, uses=ns.uses, related=ns.related, redact=list(ns.redact),
     )
 
 
@@ -1651,6 +1777,8 @@ def collect(ctx: Context) -> Path:
         ctx.notes.append("The touched files were left out (--no-files).")
     else:
         fetch_files(ctx, c)
+    if ctx.options.uses:
+        fetch_uses(ctx, c)
     if ctx.options.related:
         fetch_related(ctx, c)
     sections = [
@@ -1667,6 +1795,8 @@ def collect(ctx: Context) -> Path:
             c.head_files, c.head_sha, "at the head", c.added_paths, "added by the pull request")))
         sections.append(Section("Files at base", render_files(
             c.base_files, c.merge_base, "at the base (the merge base)", c.removed_paths, "removed by the pull request")))
+    if c.uses_files:
+        sections.append(Section("Files the diff uses", render_uses(c)))
     if c.related_files:
         sections.append(Section("Related files", render_files(c.related_files, c.head_sha, "related to the change, at the head")))
     apply_redactions(ctx, sections)

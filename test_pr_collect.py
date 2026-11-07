@@ -240,10 +240,10 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(opts, pc.Options())
 
     def test_every_flag(self):
-        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "A", "--redact", "B"])
+        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "A", "--redact", "B"])
         self.assertEqual(opts.number, 42)
         self.assertEqual(opts.ticket, "123")
-        self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.plain_diff and opts.related)
+        self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.plain_diff and opts.uses and opts.related)
         self.assertEqual(opts.redact, ["A", "B"])
 
     def test_version_and_help_exit(self):
@@ -258,7 +258,7 @@ class TestParseArgs(unittest.TestCase):
             with self.redirected() as (out, _):
                 pc.parse_args(["--help"])
         text = out.getvalue()
-        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "--version", "number"):
+        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "--version", "number"):
             self.assertIn(flag, text)
 
     @contextmanager
@@ -1091,7 +1091,7 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("+    return chosen\n", diff)
         self.assertIn("     unittest.main()\n````", diff)
         self.assertIn("· 6. Checks · 7. Diff · 8. Files at head · 9. Files at base", text)
-        self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:-1])
+        self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:-2])
 
     def test_fenced_markdown_inside_markdown_survives(self):
         code, term, ctx = run_tool(self.root, yes=True)
@@ -1391,11 +1391,115 @@ class TestRelatedAndRedact(unittest.TestCase):
         self.assertIn("--redact '(' is not a valid pattern", term.warned[0])
 
 
+class TestUses(unittest.TestCase):
+    """--uses: the files at the head that define what the diff's added lines name."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    RUBY = (
+        "diff --git a/x.rb b/x.rb\n--- a/x.rb\n+++ b/x.rb\n@@ -1 +1,9 @@\n"
+        "+# OrderNotice is only mentioned in this comment\n"
+        "+notice = OrderNotice.where(order: order, detail: OrderNotice::URGENT)&.max_by(&:event_date)\n"
+        "+shipment = Shipment.where('status != ?', Shipment::ERROR).first\n"
+        "+message = create(:order_message, numbers: [order.number])\n"
+        "+order.update_order_status(notice) if notice.is_a?(OrderNotice)\n"
+        "+tracker.append_message(\"Updated #{Order.name} #{order.id} with #{Alpha}\")\n"
+        "+def helper_one(x)\n"
+        "+  helper_two(x) + Time.zone.now\n"
+        "+end\n"
+    )
+
+    def test_identifiers_used(self):
+        # Classes and constants, a factory, methods with underscores; not what the diff defines
+        # (helper_one), not strings or comments, not the language's own (Time, where, is_a).
+        self.assertEqual(pc.identifiers_used(self.RUBY),
+                         ["OrderNotice", "URGENT", "Shipment", "ERROR", "order_message", "update_order_status", "append_message", "helper_two"])
+        # The fixture: Catalog is used by the new code; prose in docs/filtering.md is skipped.
+        self.assertEqual(pc.identifiers_used(fx("git", "diff.patch")), ["Catalog"])
+        self.assertEqual(pc.identifiers_used("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b = 1\n"), [])
+
+    def test_grep_arguments(self):
+        args = pc.uses_grep_args(["OrderNotice", "update_order_status"])
+        self.assertEqual(args[:4], ["grep", "-I", "-E", "-n"])
+        patterns = args[5::2]
+        self.assertEqual(len(patterns), 3)
+        self.assertIn("(def[[:space:]]+(self\\.)?|(class|module|function|struct|enum|interface|type|const|let|var|val)[[:space:]]+)(OrderNotice|update_order_status)([^A-Za-z0-9_]|$)", patterns[0])
+        self.assertIn("(scope|factory|has_many|has_one|belongs_to|attr_accessor|attr_reader|attr_writer|define_method)[[:space:]]+:(OrderNotice|update_order_status)", patterns[1])
+        self.assertEqual(patterns[2], "^[[:space:]]*(OrderNotice)[[:space:]]*=[^=]")
+        self.assertEqual(len(pc.uses_grep_args(["lower_only"])[5::2]), 2)
+
+    def grep_argv(self):
+        return ["git", *pc.uses_grep_args(["Catalog"]), SHAS["head"]]
+
+    def test_section_is_added(self):
+        head = SHAS["head"]
+        sh = fixture_shell(self.root).on(self.grep_argv(), (
+            f"{head}:lib/widgets/catalog.py:21:class Catalog:\n"  # touched: never repeated
+            f"{head}:lib/widgets/legacy.py:3:class Catalog:\n"
+            f"{head}:lib/widgets/legacy.py:9:    def Catalog(self):\n"
+            f"{head}:docs/notes.md:1:Catalog = the list\n"
+            "a line without the shape\n"
+        ))
+        sh.on(["git", "show", f"{head}:lib/widgets/legacy.py"], "class Catalog:\n    pass\n")
+        sh.on(["git", "show", f"{head}:docs/notes.md"], "Catalog = the list\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        sec = text.split("# pr-data: Files the diff uses\n", 1)[1]
+        self.assertTrue(sec.startswith(f"\nFiles at the head, at {head}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. Looked for the definitions of 1 identifiers.\n\n## docs/notes.md\n\nDefines: Catalog.\n\n1 lines.\n\n```\nCatalog = the list\n```\n\n\n## lib/widgets/legacy.py\n\nDefines: Catalog.\n\n2 lines."), sec[:400])
+        self.assertNotIn("## lib/widgets/catalog.py\n\nDefines", text)
+        self.assertIn("Files the diff uses (--uses): looked for the definitions of 1 identifiers; 2 files define one of them.", text)
+        self.assertIn("· 8. Files at base · 9. Files the diff uses\n", text)
+        self.assertIn("uses                2 files at the head", term.said)
+        self.assertEqual(ctx.shell.gh_calls, 17)
+
+    def test_uses_before_related_and_both_numbered(self):
+        head = SHAS["head"]
+        sh = fixture_shell(self.root).on(self.grep_argv(), f"{head}:lib/widgets/legacy.py:3:class Catalog:\n")
+        sh.on(["git", "show", f"{head}:lib/widgets/legacy.py"], "class Catalog:\n")
+        sh.on([*TestRelatedAndRedact.GREP, head], f"{head}:README.md\n")
+        sh.on(["git", "show", f"{head}:README.md"], "Use filtered().\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:6] + pc.SECTION_ORDER_ALL[7:])
+        self.assertIn("· 9. Files the diff uses · 10. Related files", text)
+
+    def test_cap_grep_failure_no_match_and_no_identifiers(self):
+        head = SHAS["head"]
+        many = "".join(f"{head}:extra/file{i:02d}.py:1:class Catalog:\n" for i in range(30))
+        sh = fixture_shell(self.root).on(self.grep_argv(), many)
+        for i in range(pc.USES_CAP):
+            sh.on(["git", "show", f"{head}:extra/file{i:02d}.py"], "class Catalog:\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("30 files define one of them, the first 25 included.", ctx.notes[-1])
+        self.assertEqual(len(ctx.shell.calls), len(set(tuple(c) for c in ctx.shell.calls)))
+        sh = fixture_shell(self.root).on(self.grep_argv(), "", "fatal: bad object", 128)
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("files the diff uses (git grep): fatal: bad object", ctx.missing[0])
+        self.assertNotIn("# pr-data: Files the diff uses", (self.root / "pr-data.txt").read_text())
+        sh = fixture_shell(self.root).on(self.grep_argv(), "", "", 1)
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True)
+        self.assertIn("0 files define one of them.", ctx.notes[-1])
+        self.assertNotIn("# pr-data: Files the diff uses", (self.root / "pr-data.txt").read_text())
+        sh = fixture_shell(self.root).on(["git", "diff", "--no-color", "--no-ext-diff", f"{SHAS['merge_base']}...{head}"], "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b = 1\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, uses=True)
+        self.assertEqual(code, 0, term.warned)
+        self.assertIn("the diff uses no identifier to look for", ctx.notes[-1])
+
+
 class TestDocumentation(unittest.TestCase):
     def test_readme_and_format_describe_the_tool(self):
         readme = (HERE / "README.md").read_text()
         for piece in ("## Setup", "## Usage", "### Options", "### The ticket number", "pr-data.txt", "PR-DATA-FORMAT.md",
-                      "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "Python 3.11"):
+                      "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "Python 3.11"):
             self.assertIn(piece, readme, piece)
         spec = (HERE / "PR-DATA-FORMAT.md").read_text()
         for name in pc.SECTION_ORDER_ALL:

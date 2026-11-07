@@ -24,8 +24,9 @@ number, and read every review thread at its place.
 ```
 
   `--no-files` leaves the last two out. `--plain-diff` adds `# pr-data: Diff` between
-  Checks and Files at head; `--related` adds `# pr-data: Related files` at the end. The
-  Header's **Sections** line lists what is present, numbered in order.
+  Checks and Files at head; `--uses` adds `# pr-data: Files the diff uses` and `--related`
+  adds `# pr-data: Related files`, in that order, at the end. The Header's **Sections**
+  line lists what is present, numbered in order.
 
 ## 2. Splitting the file
 
@@ -148,7 +149,7 @@ One sentence naming the `git diff <merge base>...<head>` command and its length,
 patch in a ```` ```diff ```` block exactly as git wrote it. It applies with `git apply`
 once lifted out of the fence. Left out by default: the Annotated diff holds every line.
 
-## 11. Files at head, Files at base, Related files
+## 11. Files at head, Files at base, Files the diff uses, Related files
 
 `## <path>` per file, sorted by path, then `<n> lines.` and the file in a fenced block.
 The head section holds every file the diff touches that still exists at the head, except
@@ -158,6 +159,12 @@ and goes on with the others. The base section likewise holds every touched file 
 at the merge base, under its old path, except the files the pull request **removed**, named
 the same way. A binary file says `(binary, <n> bytes, not inlined)`; a file git could not
 show says `(not readable; see the header)`.
+
+The **Files the diff uses** section (`--uses`) holds files at the head, not touched by the
+diff, that define a class, module, constant, method, scope, factory, or association the
+diff's added lines name; each file's heading is followed by `Defines: <names>.` The
+**Related files** section (`--related`) holds files at the head that name an identifier the
+diff defines. Both are capped at 25 files; the Header's **Notes** say how many were found.
 
 ## 12. Reading notes
 

@@ -19,7 +19,7 @@ One command, run on the branch of the pull request, gathers:
   removes is already whole in the annotated diff and is named rather than repeated.
 
 The file is plain Markdown in eight sections under fixed headings, so a person or a program
-can read it anywhere and split it apart. Two more sections come with the flags below. The exact layout is in
+can read it anywhere and split it apart. Three more sections come with the flags below. The exact layout is in
 [PR-DATA-FORMAT.md](PR-DATA-FORMAT.md).
 
 ## Setup
@@ -78,7 +78,7 @@ A second run on the same branch writes the file again in place.
 
 ```
 pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff]
-           [--related] [--redact PATTERN] [--version]
+           [--uses] [--related] [--redact PATTERN] [--version]
 ```
 
 - `number` — the pull request number, for a branch with more than one open pull request
@@ -91,6 +91,9 @@ pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff
 - `--full-logs` — keep every failing step's log whole instead of its last 200 lines.
 - `--plain-diff` — add the branch diff a second time, as git wrote it, in a section of its
   own, for `git apply`. The annotated diff already holds every line.
+- `--uses` — add a section of files at the head that define what the diff uses: a class,
+  a constant, a method, or a factory named on an added line, up to 25 files, each saying
+  what it defines. This is what a reader needs to judge a call the diff makes.
 - `--related` — add a section of files at the head that name an identifier the diff
   defines (a method, a class, a constant), up to 25, so a reader can see who else uses it.
 - `--redact PATTERN` — a regular expression replaced with `[REDACTED]` everywhere but the
