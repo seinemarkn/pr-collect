@@ -29,6 +29,8 @@ OUTPUT_NAME = "pr-data.txt"
 MIN_TICKET_NUMBER = 100
 RETRY_LIMIT = 3
 DEFAULT_RETRY_WAIT = 60
+NETWORK_RETRY_LIMIT = 1
+NETWORK_RETRY_WAIT = 5
 
 
 class CollectError(Exception):
@@ -350,19 +352,35 @@ def _decode_concatenated(text: str):
 
 RATE_LIMIT_RE = re.compile(r"rate limit|HTTP 403|HTTP 429|abuse", re.IGNORECASE)
 RETRY_AFTER_RE = re.compile(r"retry[- ]after[:= ]+(\d+)", re.IGNORECASE)
+NETWORK_ERROR_RE = re.compile(
+    r"connection reset|connection refused|broken pipe|i/o timeout|tls handshake|unexpected eof|"
+    r"no such host|network is unreachable|dial tcp|temporary failure|server closed",
+    re.IGNORECASE,
+)
 
 
 def gh_run(ctx: Context, args: list[str]) -> CommandResult:
-    """Run gh, waiting and trying again on a rate limit."""
-    for attempt in range(RETRY_LIMIT + 1):
+    """Run gh, waiting and trying again on a rate limit, and once more after a dropped
+    connection."""
+    rate_tries = network_tries = 0
+    while True:
         r = ctx.shell.run(["gh", *args])
-        if r.ok or not RATE_LIMIT_RE.search(r.stderr) or attempt == RETRY_LIMIT:
+        if r.ok:
             return r
-        m = RETRY_AFTER_RE.search(r.stderr)
-        wait = int(m.group(1)) if m else DEFAULT_RETRY_WAIT
-        ctx.terminal.warn(f"GitHub asked to wait ({wait}s) before trying again")
-        ctx.shell.sleep(wait)
-    return r  # pragma: no cover
+        if RATE_LIMIT_RE.search(r.stderr) and rate_tries < RETRY_LIMIT:
+            rate_tries += 1
+            m = RETRY_AFTER_RE.search(r.stderr)
+            wait = int(m.group(1)) if m else DEFAULT_RETRY_WAIT
+            ctx.terminal.warn(f"GitHub asked to wait ({wait}s) before trying again")
+            ctx.shell.sleep(wait)
+            continue
+        if NETWORK_ERROR_RE.search(r.stderr) and network_tries < NETWORK_RETRY_LIMIT:
+            network_tries += 1
+            reason = r.stderr.strip().splitlines()[0] if r.stderr.strip() else "no output"
+            ctx.terminal.warn(f"the connection to GitHub dropped ({reason}); trying again in {NETWORK_RETRY_WAIT}s")
+            ctx.shell.sleep(NETWORK_RETRY_WAIT)
+            continue
+        return r
 
 
 def gh_json(ctx: Context, args: list[str], *, optional: bool = False):

@@ -572,6 +572,31 @@ class TestGhJson(unittest.TestCase):
         self.assertEqual(sh.slept, [7])
         self.assertIn("wait (7s)", ctx.terminal.warned[0])
 
+    def test_dropped_connection_is_tried_once_more(self):
+        answers = iter([("", "Get \"https://h/api\": read tcp 10.0.0.1:1->10.0.0.2:443: read: connection reset by peer", 1), ('{"ok": 1}', "", 0)])
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/files"], lambda: next(answers))
+        ctx = self.ctx(sh)
+        self.assertEqual(pc.gh_api(ctx, self.REPO, "repos/x/y/files"), {"ok": 1})
+        self.assertEqual(sh.slept, [pc.NETWORK_RETRY_WAIT])
+        self.assertEqual(ctx.terminal.warned, ["the connection to GitHub dropped (Get \"https://h/api\": read tcp 10.0.0.1:1->10.0.0.2:443: read: connection reset by peer); trying again in 5s"])
+        self.assertEqual(ctx.missing, [])
+
+    def test_dropped_connection_twice_is_recorded(self):
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/files"], "", "dial tcp: i/o timeout", 1)
+        ctx = self.ctx(sh)
+        self.assertIsNone(pc.gh_api(ctx, self.REPO, "repos/x/y/files", optional=True))
+        self.assertEqual(len(sh.calls), pc.NETWORK_RETRY_LIMIT + 1)
+        self.assertEqual(sh.slept, [pc.NETWORK_RETRY_WAIT] * pc.NETWORK_RETRY_LIMIT)
+        self.assertIn("i/o timeout", ctx.missing[0])
+
+    def test_other_failures_are_not_tried_again(self):
+        sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/nope"], "", "HTTP 404: Not Found", 1)
+        ctx = self.ctx(sh)
+        with self.assertRaises(pc.CollectError):
+            pc.gh_api(ctx, self.REPO, "repos/x/y/nope")
+        self.assertEqual(len(sh.calls), 1)
+        self.assertEqual(sh.slept, [])
+
     def test_rate_limit_without_retry_after_waits_the_default_and_gives_up(self):
         sh = FakeShell().on(["gh", "api", "--hostname", "h", "--paginate", "repos/x/y/z"], "", "HTTP 429 secondary rate limit", 1)
         ctx = self.ctx(sh)
