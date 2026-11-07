@@ -109,6 +109,7 @@ class Options:
     yes: bool = False
     no_files: bool = False
     full_logs: bool = False
+    plain_diff: bool = False
     related: bool = False
     redact: list[str] = field(default_factory=list)
 
@@ -451,7 +452,13 @@ class Section:
 HEADING_PREFIX = "# pr-data: "
 SECTION_ORDER = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Diff", "Files at head", "Files at base",
+    "Checks", "Files at head", "Files at base",
+]
+# Every section that can appear, in the order it appears: the eight above, plus "Diff"
+# (--plain-diff) between Checks and the files, and "Related files" (--related) last.
+SECTION_ORDER_ALL = [
+    "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
+    "Checks", "Diff", "Files at head", "Files at base", "Related files",
 ]
 
 
@@ -1604,6 +1611,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
     parser.add_argument("--yes", action="store_true", help="take the ticket number read from the branch without asking")
     parser.add_argument("--no-files", action="store_true", help="leave out the whole touched files at the head and at the base")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
+    parser.add_argument("--plain-diff", action="store_true", help="add the branch diff a second time as git wrote it, for git apply")
     parser.add_argument("--related", action="store_true", help="add files at the head that name an identifier the diff adds or changes")
     parser.add_argument("--redact", action="append", default=[], metavar="PATTERN",
                         help="a regular expression to replace with [REDACTED] everywhere but the header; may be repeated")
@@ -1611,7 +1619,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
     ns = parser.parse_args(argv)
     return Options(
         number=ns.number, ticket=ns.ticket, yes=ns.yes,
-        no_files=ns.no_files, full_logs=ns.full_logs, related=ns.related, redact=list(ns.redact),
+        no_files=ns.no_files, full_logs=ns.full_logs, plain_diff=ns.plain_diff, related=ns.related, redact=list(ns.redact),
     )
 
 
@@ -1651,8 +1659,9 @@ def collect(ctx: Context) -> Path:
         Section("Annotated diff", render_annotated_diff(ctx, c)),
         Section("Commits", render_commits(c)),
         Section("Checks", render_checks(c)),
-        Section("Diff", render_diff(c)),
     ]
+    if ctx.options.plain_diff:
+        sections.append(Section("Diff", render_diff(c)))
     if not ctx.options.no_files:
         sections.append(Section("Files at head", render_files(
             c.head_files, c.head_sha, "at the head", c.added_paths, "added by the pull request")))

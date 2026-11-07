@@ -11,15 +11,15 @@ One command, run on the branch of the pull request, gathers:
   threads with their replies, and the events between them (commits pushed, force pushes,
   labels, review requests, draft and ready marks, renames, merges);
 - the commits, oldest first, with the files each touched;
-- the checks and GitHub Actions runs at the head, job by job and step by step, with the
-  annotations and the failing steps' logs;
-- the branch diff from git, twice: once as git wrote it, and once **annotated**, with old
-  and new line numbers on every line and every review thread written in right after the
-  line it was made on;
-- every touched file whole, at the head and at the base.
+- the checks and GitHub Actions runs at the head, one line per passing job, and for a
+  failed job its steps, annotations, and the failing steps' logs;
+- the branch diff from git, **annotated**: old and new line numbers on every line and every
+  review thread written in right after the line it was made on;
+- every touched file whole, at the head and at the base. A file the pull request adds or
+  removes is already whole in the annotated diff and is named rather than repeated.
 
-The file is plain Markdown in nine sections under fixed headings, so a person or a program
-can read it anywhere and split it apart. The exact layout is in
+The file is plain Markdown in eight sections under fixed headings, so a person or a program
+can read it anywhere and split it apart. Two more sections come with the flags below. The exact layout is in
 [PR-DATA-FORMAT.md](PR-DATA-FORMAT.md).
 
 ## Setup
@@ -67,7 +67,7 @@ conversation        2 comments, 2 reviews, 5 review threads (3 unresolved)
 commits             3
 checks              1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); not deployed
 diff                5 files, +41 -0
-files               5 at the head, 3 at the base
+files               3 at the head, 3 at the base; 2 added whole in the annotated diff only
 wrote /home/you/src/widgets/pr-data.txt
 Do not commit pr-data.txt: it holds other people's comments and code.
 ```
@@ -77,8 +77,8 @@ A second run on the same branch writes the file again in place.
 ### Options
 
 ```
-pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--related]
-           [--redact PATTERN] [--version]
+pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff]
+           [--related] [--redact PATTERN] [--version]
 ```
 
 - `number` — the pull request number, for a branch with more than one open pull request
@@ -89,6 +89,8 @@ pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--related]
 - `--no-files` — leave out the two sections holding the touched files whole, for a shorter
   file.
 - `--full-logs` — keep every failing step's log whole instead of its last 200 lines.
+- `--plain-diff` — add the branch diff a second time, as git wrote it, in a section of its
+  own, for `git apply`. The annotated diff already holds every line.
 - `--related` — add a section of files at the head that name an identifier the diff
   defines (a method, a class, a constant), up to 25, so a reader can see who else uses it.
 - `--redact PATTERN` — a regular expression replaced with `[REDACTED]` everywhere but the

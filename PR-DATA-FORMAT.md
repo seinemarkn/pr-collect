@@ -10,7 +10,7 @@ number, and read every review thread at its place.
   made in. Written again in place on every run.
 - Plain GitHub-flavoured Markdown. Everything that is code, a log, a diff, or a file's
   contents sits in a fenced block.
-- Nine sections, always in this order, each under a top-level heading of one fixed form:
+- Eight sections, always in this order, each under a top-level heading of one fixed form:
 
 ```
 # pr-data: Header
@@ -19,13 +19,13 @@ number, and read every review thread at its place.
 # pr-data: Annotated diff
 # pr-data: Commits
 # pr-data: Checks
-# pr-data: Diff
 # pr-data: Files at head
 # pr-data: Files at base
 ```
 
-  `--no-files` leaves the last two out; `--related` adds a tenth, `# pr-data: Related
-  files`. The Header's **Sections** line lists what is present.
+  `--no-files` leaves the last two out. `--plain-diff` adds `# pr-data: Diff` between
+  Checks and Files at head; `--related` adds `# pr-data: Related files` at the end. The
+  Header's **Sections** line lists what is present, numbered in order.
 
 ## 2. Splitting the file
 
@@ -136,23 +136,28 @@ verbatim, and `Files: <path> (+a -r), …`. Oldest first.
 `## Actions runs`. Each check, status, job, and step is a list line starting with a
 four-letter mark: `PASS`, `FAIL`, `SKIP`, `....` (still running), or the first letters of
 an unusual outcome. A run is `### <workflow> run #<n> (<event>) · <outcome> · <url>`; its
-jobs and their steps are nested beneath. Under a failed job: `- Annotations:` with one
-line per annotation, then for each failing step `` Log of step "<name>" (last 200 of N lines): ``
-and the log in a fenced block (the whole log with `--full-logs`).
+jobs are nested beneath. A job that passed or was skipped is one line, ending in its step
+count; a failed or still-running job lists its steps. Under a failed job: `- Annotations:`
+with one line per annotation, then for each failing step
+`` Log of step "<name>" (last 200 of N lines): `` and the log in a fenced block (the whole
+log with `--full-logs`).
 
-## 10. Diff
+## 10. Diff (with `--plain-diff`)
 
 One sentence naming the `git diff <merge base>...<head>` command and its length, then the
 patch in a ```` ```diff ```` block exactly as git wrote it. It applies with `git apply`
-once lifted out of the fence.
+once lifted out of the fence. Left out by default: the Annotated diff holds every line.
 
 ## 11. Files at head, Files at base, Related files
 
 `## <path>` per file, sorted by path, then `<n> lines.` and the file in a fenced block.
-The head section holds every file the diff touches that still exists at the head; the base
-section every file that existed at the merge base, under its old path. A binary file says
-`(binary, <n> bytes, not inlined)`; a file git could not show says
-`(not readable; see the header)`.
+The head section holds every file the diff touches that still exists at the head, except
+the files the pull request **added**: those are whole in the Annotated diff already, so the
+section opens with one line naming them (`Not repeated here, added by the pull request; …`)
+and goes on with the others. The base section likewise holds every touched file as it was
+at the merge base, under its old path, except the files the pull request **removed**, named
+the same way. A binary file says `(binary, <n> bytes, not inlined)`; a file git could not
+show says `(not readable; see the header)`.
 
 ## 12. Reading notes
 

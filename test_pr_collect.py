@@ -240,10 +240,10 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(opts, pc.Options())
 
     def test_every_flag(self):
-        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--related", "--redact", "A", "--redact", "B"])
+        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "A", "--redact", "B"])
         self.assertEqual(opts.number, 42)
         self.assertEqual(opts.ticket, "123")
-        self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.related)
+        self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.plain_diff and opts.related)
         self.assertEqual(opts.redact, ["A", "B"])
 
     def test_version_and_help_exit(self):
@@ -258,7 +258,7 @@ class TestParseArgs(unittest.TestCase):
             with self.redirected() as (out, _):
                 pc.parse_args(["--help"])
         text = out.getvalue()
-        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--related", "--redact", "--version", "number"):
+        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "--version", "number"):
             self.assertIn(flag, text)
 
     @contextmanager
@@ -1060,12 +1060,8 @@ class TestDiffAndFiles(unittest.TestCase):
         text = (self.root / "pr-data.txt").read_text()
         self.assertIn("5 files changed", text)
         self.assertIn("  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
-        diff = self.section(text, "Diff")
+        self.assertNotIn("# pr-data: Diff\n", text)
         self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", self.section(text, "Annotated diff"))
-        self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines, as git wrote it", diff)
-        self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
-        self.assertIn("+    return chosen\n", diff)
-        self.assertIn("     unittest.main()\n````", diff)
         head = self.section(text, "Files at head")
         self.assertIn("Not repeated here, added by the pull request; the Annotated diff section holds each whole: docs/diagram.png, lib/widgets/filter.py.\n\n"
                       f"Every other touched file whole at the head, at {SHAS['head']}.", head)
@@ -1083,7 +1079,19 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("## lib/widgets/catalog.py", base)
         self.assertTrue(any(l.startswith("diff                5 files, +41 -0") for l in term.said))
         self.assertIn("files               3 at the head, 3 at the base; 2 added whole in the annotated diff only", term.said)
-        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Diff · 8. Files at head · 9. Files at base", text)
+        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files at head · 8. Files at base", text)
+
+    def test_plain_diff_flag(self):
+        code, term, ctx = run_tool(self.root, yes=True, plain_diff=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        diff = self.section(text, "Diff")
+        self.assertIn(f"`git diff {SHAS['merge_base']}...{SHAS['head']}`, 88 lines, as git wrote it", diff)
+        self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
+        self.assertIn("+    return chosen\n", diff)
+        self.assertIn("     unittest.main()\n````", diff)
+        self.assertIn("· 6. Checks · 7. Diff · 8. Files at head · 9. Files at base", text)
+        self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:-1])
 
     def test_fenced_markdown_inside_markdown_survives(self):
         code, term, ctx = run_tool(self.root, yes=True)
@@ -1098,7 +1106,7 @@ class TestDiffAndFiles(unittest.TestCase):
         text = (self.root / "pr-data.txt").read_text()
         self.assertNotIn("# pr-data: Files at head", text)
         self.assertIn("The touched files were left out (--no-files).", text)
-        self.assertIn("· 7. Diff\n", text)
+        self.assertIn("· 6. Checks\n", text)
 
     def test_reconciliation_differences_are_said(self):
         sh = fixture_shell(self.root).on(["gh", "api", "--hostname", "github.com", "--paginate", "repos/example/widgets/pulls/42/files"],
@@ -1233,7 +1241,6 @@ class TestAnnotatedDiff(unittest.TestCase):
         self.assertIn("### Threads on lines not in this diff (outdated)\n\nOriginally on line 7 at " + SHAS["commits"][0][:10] + ": `\"\"\"The widgets matching every given condition, in their original order.\"\"\"`\n\n**Review thread** on lib/widgets/filter.py, originally line 7 (new side), outdated · resolved", sec)
         self.assertEqual(sec.count("**Review thread**"), 5)
         self.assertNotIn("## Threads on files not in this diff", sec)
-        self.assertIn("file list is at the top of the Annotated diff section", text.split("# pr-data: Diff\n", 1)[1])
 
     def test_stray_threads_unreadable_original_and_empty_diff(self):
         sh = fixture_shell(self.root).on(["git", "show", f"{SHAS['commits'][0]}:lib/widgets/filter.py"], "", "fatal: gone", 128)
@@ -1268,13 +1275,14 @@ class TestTheFile(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_nine_sections_in_order_and_split_back(self):
+    def test_eight_sections_in_order_and_split_back(self):
         code, term, ctx = run_tool(self.root, yes=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         names = [n for n, _ in pc.split_sections(text)]
         self.assertEqual(names, pc.SECTION_ORDER)
-        self.assertEqual(len(names), 9)
+        self.assertEqual(len(names), 8)
+        self.assertEqual([n for n in pc.SECTION_ORDER_ALL if n in pc.SECTION_ORDER], pc.SECTION_ORDER)
         self.assertEqual(pc.split_sections("no heading\n"), [])
         self.assertEqual(pc.split_sections("# pr-data: A\n\nx\n# pr-data: B\n"), [("A", "\nx"), ("B", "")])
 
@@ -1330,7 +1338,7 @@ class TestRelatedAndRedact(unittest.TestCase):
         self.assertIn("## README.md", text)
         self.assertNotIn("## lib/widgets/catalog.py\n\n1 lines", text)
         self.assertIn("Related files (--related): 7 identifiers (filtered, colours, MAX_SIZE, filter_widgets, test_filtered_by_colour, test_filtered_by_size, test_colours); 2 files name one of them.", text)
-        self.assertIn("· 10. Related files", text)
+        self.assertIn("· 9. Related files", text)
         self.assertTrue(any(l.startswith("related             2 files") for l in term.said))
 
     def test_related_cap_grep_failure_and_no_identifiers(self):
@@ -1387,10 +1395,10 @@ class TestDocumentation(unittest.TestCase):
     def test_readme_and_format_describe_the_tool(self):
         readme = (HERE / "README.md").read_text()
         for piece in ("## Setup", "## Usage", "### Options", "### The ticket number", "pr-data.txt", "PR-DATA-FORMAT.md",
-                      "--yes", "--no-files", "--full-logs", "--related", "--redact", "Python 3.11"):
+                      "--yes", "--no-files", "--full-logs", "--plain-diff", "--related", "--redact", "Python 3.11"):
             self.assertIn(piece, readme, piece)
         spec = (HERE / "PR-DATA-FORMAT.md").read_text()
-        for name in pc.SECTION_ORDER:
+        for name in pc.SECTION_ORDER_ALL:
             self.assertIn(f"# pr-data: {name}", spec)
         self.assertIn("Review thread", spec)
 
