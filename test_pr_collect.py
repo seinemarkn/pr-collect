@@ -960,7 +960,7 @@ class TestChecks(unittest.TestCase):
             "- .... build / image · Example CI · in progress since 2026-03-04T15:05:00Z · https://ci.example.com/build/88",
             "- PASS ci/coverage · success · Coverage 94% (+1%) · https://coverage.example.com/widgets/42",
             "### CI run #17 (push) · failure · https://github.com/example/widgets/actions/runs/5001",
-            "- PASS job lint · success · 42s\n  - PASS 1. Set up job · success",
+            "- PASS job lint · success · 42s · 3 steps\n- FAIL job tests · failure · 1m 3s\n  - PASS 1. Set up job · success",
             "- FAIL job tests · failure · 1m 3s",
             "  - FAIL 3. Run tests · failure",
             "  - SKIP 4. Upload report · skipped",
@@ -968,9 +968,11 @@ class TestChecks(unittest.TestCase):
             "  Log of step \"Run tests\" (last 200 of 229 lines):",
             "FAILED (failures=1)\n2026-03-04T15:02:02.002Z ##[error]Process completed with exit code 1.\n```",
             "  Log of step \"Upload report\" (1 lines):",
-            "- SKIP job docs · skipped · 1s",
+            "- SKIP job docs · skipped · 1s\n",
         ]:
             self.assertIn(piece, sec, piece)
+        self.assertNotIn("  - PASS 2. Run lint", sec)
+        self.assertIn("  - PASS 2. Install · success", sec)
         self.assertNotIn("collected test 29\n", sec)
         self.assertIn("collected test 30\n", sec)
         self.assertTrue(any(l.startswith("checks              1 failing") for l in term.said))

@@ -1073,9 +1073,14 @@ def render_checks(c: Collected) -> str:
             line = f"- {mark(job)} job {job.get('name')} · {outcome(job)}"
             if duration(job.get("started_at"), job.get("completed_at")):
                 line += f" · {duration(job.get('started_at'), job.get('completed_at'))}"
-            out.append(line)
-            for step in job.get("steps") or []:
-                out.append(f"  - {mark(step)} {step.get('number')}. {step.get('name')} · {outcome(step)}")
+            steps = job.get("steps") or []
+            if outcome(job) in FAILING or outcome(job) in GOING:
+                out.append(line)
+                for step in steps:
+                    out.append(f"  - {mark(step)} {step.get('number')}. {step.get('name')} · {outcome(step)}")
+            else:
+                # A job that passed or was skipped is one line; its steps say nothing a review needs.
+                out.append(line + (f" · {len(steps)} steps" if steps else ""))
             if outcome(job) in FAILING:
                 notes = c.annotations.get(job["id"]) or []
                 if notes:

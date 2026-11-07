@@ -357,10 +357,7 @@ Status at 22abb9a877: 1 failing (tests); 2 successful (lint, ci/coverage); 1 ski
 
 ### CI run #17 (push) · failure · https://github.com/example/widgets/actions/runs/5001
 
-- PASS job lint · success · 42s
-  - PASS 1. Set up job · success
-  - PASS 2. Run lint · success
-  - PASS 3. Complete job · success
+- PASS job lint · success · 42s · 3 steps
 - FAIL job tests · failure · 1m 3s
   - PASS 1. Set up job · success
   - PASS 2. Install · success
