@@ -1164,6 +1164,8 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertTrue(pc.render_diff(c).endswith("\n\n(empty)\n"))
         self.assertEqual(pc.render_file_list(c), "No files changed.\n")
         self.assertEqual(pc.render_files({}, "h", "at the head"), "No files at the head.\n")
+        self.assertEqual(pc.render_files({"a.bin": "x\x00y"}, "h", "at the head"),
+                         "Every touched file whole at the head, at h.\n\n## a.bin\n\n(binary, 3 bytes, not inlined)\n")
         self.assertEqual(pc.render_files({}, "h", "at the base", ["b.py", "a.py"], "removed by the pull request"),
                          "Not repeated here, removed by the pull request; the Annotated diff section holds each whole: a.py, b.py.\n\nNo other files at the base.\n")
 
