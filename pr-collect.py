@@ -432,7 +432,14 @@ class Collected:
     files: list = field(default_factory=list)
     head_files: dict = field(default_factory=dict)
     base_files: dict = field(default_factory=dict)
+    added_paths: list = field(default_factory=list)  # added by the pull request: whole in the annotated diff, not repeated
+    removed_paths: list = field(default_factory=list)  # removed by it: likewise
     related_files: dict = field(default_factory=dict)
+
+    @property
+    def head_paths(self) -> set:
+        """Every touched path that exists at the head, whether or not it is in the head section."""
+        return {ch.path for ch in self.files if ch.at_head}
 
 
 @dataclass
@@ -1200,12 +1207,23 @@ def file_at(ctx: Context, sha: str, path: str) -> str | None:
 
 
 def fetch_files(ctx: Context, c: Collected) -> None:
+    """Every touched file whole, except that a file added by the pull request is already
+    whole in the annotated diff at the head, and a removed one at the base; those are
+    named, not repeated."""
     for ch in c.files:
-        if ch.at_head:
+        if ch.status == "added":
+            c.added_paths.append(ch.path)
+        elif ch.at_head:
             c.head_files[ch.path] = file_at(ctx, c.head_sha, ch.path)
-        if ch.at_base:
+        if ch.status == "removed":
+            c.removed_paths.append(ch.base_path)
+        elif ch.at_base:
             c.base_files[ch.base_path] = file_at(ctx, c.merge_base, ch.base_path)
-    ctx.terminal.say(f"files               {len(c.head_files)} at the head, {len(c.base_files)} at the base")
+    line = f"files               {len(c.head_files)} at the head, {len(c.base_files)} at the base"
+    skipped = [f"{len(c.added_paths)} added" if c.added_paths else "", f"{len(c.removed_paths)} removed" if c.removed_paths else ""]
+    if any(skipped):
+        line += f"; {' and '.join(x for x in skipped if x)} whole in the annotated diff only"
+    ctx.terminal.say(line)
 
 
 def change_label(ch: FileChange) -> str:
@@ -1229,10 +1247,15 @@ def render_diff(c: Collected) -> str:
     return intro + fenced(c.patch, "diff")
 
 
-def render_files(files: dict[str, str | None], sha: str, label: str) -> str:
+def render_files(files: dict[str, str | None], sha: str, label: str, skipped: list[str] = (), why: str = "") -> str:
+    out = []
+    if skipped:
+        out += [f"Not repeated here, {why}; the Annotated diff section holds each whole: {', '.join(sorted(skipped))}.", ""]
+    other = "other " if skipped else ""
     if not files:
-        return f"No files {label}.\n"
-    out = [f"Every touched file whole {label}, at {sha}.", ""]
+        out.append(f"No {other}files {label}.")
+        return "\n".join(out) + "\n"
+    out += [f"Every {other}touched file whole {label}, at {sha}.", ""]
     for path in sorted(files):
         text = files[path]
         out.append(f"## {path}")
@@ -1500,7 +1523,7 @@ def fetch_related(ctx: Context, c: Collected) -> None:
     paths = []
     for line in r.stdout.splitlines():
         path = line.split(":", 1)[1] if ":" in line else line
-        if path and path not in c.head_files and path not in paths:
+        if path and path not in c.head_paths and path not in paths:
             paths.append(path)
     chosen = paths[:RELATED_CAP]
     for path in chosen:
@@ -1631,8 +1654,10 @@ def collect(ctx: Context) -> Path:
         Section("Diff", render_diff(c)),
     ]
     if not ctx.options.no_files:
-        sections.append(Section("Files at head", render_files(c.head_files, c.head_sha, "at the head")))
-        sections.append(Section("Files at base", render_files(c.base_files, c.merge_base, "at the base (the merge base)")))
+        sections.append(Section("Files at head", render_files(
+            c.head_files, c.head_sha, "at the head", c.added_paths, "added by the pull request")))
+        sections.append(Section("Files at base", render_files(
+            c.base_files, c.merge_base, "at the base (the merge base)", c.removed_paths, "removed by the pull request")))
     if c.related_files:
         sections.append(Section("Related files", render_files(c.related_files, c.head_sha, "related to the change, at the head")))
     apply_redactions(ctx, sections)

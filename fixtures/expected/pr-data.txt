@@ -679,11 +679,9 @@ index 2b3f02c..5d3d85a 100644
 
 # pr-data: Files at head
 
-Every touched file whole at the head, at 22abb9a877c8810578042c25ccf0b591950f23f8.
+Not repeated here, added by the pull request; the Annotated diff section holds each whole: docs/diagram.png, lib/widgets/filter.py.
 
-## docs/diagram.png
-
-(binary, 68 bytes, not inlined)
+Every other touched file whole at the head, at 22abb9a877c8810578042c25ccf0b591950f23f8.
 
 ## docs/filtering.md
 
@@ -762,29 +760,6 @@ class Catalog:
 
     def colours(self):
         return sorted({w.colour for w in self.widgets})
-```
-
-
-## lib/widgets/filter.py
-
-15 lines.
-
-```
-"""Filtering a catalog by colour or size."""
-
-MAX_SIZE = 10
-
-
-def filter_widgets(widgets, colour=None, min_size=None):
-    """The widgets matching every given condition, in their original order."""
-    chosen = []
-    for widget in widgets:
-        if colour is not None and widget.colour != colour:
-            continue
-        if min_size is not None and widget.size < min_size:
-            continue
-        chosen.append(widget)
-    return chosen
 ```
 
 
