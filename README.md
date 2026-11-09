@@ -5,7 +5,7 @@ file, `pr-data.txt`, written at the root of the clone you run it in.
 
 One command, run on the branch of the pull request, gathers:
 
-- the pull request's record: title, description, author, state, base and head, size,
+- the pull request's record: title, description, author, state, the two branches, size,
   labels, reviewers, review decision, mergeability, linked issues;
 - the whole conversation in time order: comments, reviews with their verdicts, review
   threads with their replies, and the events between them (commits pushed, force pushes,

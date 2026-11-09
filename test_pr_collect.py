@@ -1590,7 +1590,7 @@ class TestRelatedAndRedact(unittest.TestCase):
 
 
 class TestUses(unittest.TestCase):
-    """--uses: the files at the head that define what the diff's added lines name."""
+    """--uses: the files on the pull request's branch that define what the diff's added lines name."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

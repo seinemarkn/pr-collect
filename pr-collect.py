@@ -1170,7 +1170,7 @@ def render_checks(c: Collected) -> str:
 @dataclass
 class FileChange:
     status: str  # added, modified, removed, renamed, copied, type changed
-    path: str  # the path at the head (the old path for a removed file)
+    path: str  # the path on the pull request's branch (the old path for a removed file)
     old_path: str | None = None  # for a rename or copy
     added: int | None = None  # None for a binary file
     removed: int | None = None
@@ -1609,7 +1609,7 @@ def fetch_related(ctx: Context, c: Collected) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Files the diff uses (--uses): the files at the head that define what the added lines
+# Files the diff uses (--uses): the files on the pull request's branch that define what the added lines
 # name, the mirror of the related files.
 # ---------------------------------------------------------------------------
 
