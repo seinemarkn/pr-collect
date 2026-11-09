@@ -925,7 +925,7 @@ class TestRefsAndCommits(unittest.TestCase):
     def test_render_commits(self):
         repo = pc.Repo("github.com", "example", "widgets", self.root)
         c = pc.Collected(repo, "b", pc.Ticket(1), 42, {}, FIXED_TIME)
-        self.assertEqual(pc.render_commits(c), "No commits between the merge base and the head.\n")
+        self.assertEqual(pc.render_commits(c), "No commits between the merge base and the pull request's branch.\n")
         c.commits = pc.parse_log(fx("git", "log.txt"))
         text = pc.render_commits(c)
         self.assertIn(f"## 1. {SHAS['commits'][0][:10]} · Octo Developer <octo-dev@example.com> · 2026-03-02T09:00:00Z", text)
@@ -1029,7 +1029,7 @@ class TestChecks(unittest.TestCase):
         code, term, ctx = run_tool(self.root, sh, yes=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
-        self.assertIn("**Checks:** no checks reported at the head", text)
+        self.assertIn("**Checks:** no checks reported on the pull request's branch", text)
         sec = self.section(text)
         self.assertIn("## Check runs\n\nNone.", sec)
         self.assertIn("## Commit statuses\n\nNone.", sec)
@@ -1087,18 +1087,35 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
         self.assertNotIn("# pr-data: Diff\n", text)
         self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", self.section(text, "Annotated diff"))
-        self.assertNotIn("# pr-data: Files at head", text)
-        base = self.section(text, "Files at base")
-        self.assertTrue(base.startswith(f"\nEvery touched file whole at the base (the merge base), at {SHAS['merge_base']}."), base[:120])
-        self.assertIn("## docs/usage.md\n\n13 lines.", base)
-        self.assertNotIn("## docs/filtering.md", base)
-        self.assertNotIn("## lib/widgets/filter.py", base)
-        self.assertNotIn("## docs/diagram.png", base)
-        self.assertIn("## lib/widgets/catalog.py\n\n34 lines.", base)
-        self.assertIn("## tests/test_catalog.py\n\n21 lines.", base)
+        self.assertNotIn("# pr-data: Files at", text)
+        main = self.section(text, "Files on main")
+        self.assertTrue(main.startswith(
+            "\nNot on main, added by the pull request; the Annotated diff section holds each whole: docs/diagram.png, lib/widgets/filter.py.\n\n"
+            f"Every other touched file whole as it stood on main where the pull request's branch split off (commit {SHAS['merge_base']})."), main[:300])
+        self.assertIn("## docs/usage.md\n\n13 lines.", main)
+        self.assertNotIn("## docs/filtering.md", main)
+        self.assertNotIn("## lib/widgets/filter.py", main)
+        self.assertNotIn("## docs/diagram.png", main)
+        self.assertIn("## lib/widgets/catalog.py\n\n34 lines.", main)
+        self.assertIn("## tests/test_catalog.py\n\n21 lines.", main)
         self.assertTrue(any(l.startswith("diff                5 files, +41 -0") for l in term.said))
-        self.assertIn("files               3 at the base; 2 added whole in the annotated diff only", term.said)
-        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files at base", text)
+        self.assertIn("files               3 on main; 2 added whole in the annotated diff only", term.said)
+        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files on main", text)
+
+    def test_the_files_section_is_named_for_the_branch_the_pull_request_merges_into(self):
+        sh = fixture_shell(self.root)
+        sh.on(["gh", "pr", "view", "42", "-R", REPO_ARG, "--json", pc.PR_FIELDS], fx("gh", "pr-view.json").replace('"baseRefName": "main"', '"baseRefName": "develop"'))
+        sh.on(["git", "fetch", "-q", "origin", "+refs/heads/develop:refs/remotes/origin/develop", "+refs/pull/42/head:refs/remotes/origin/pr/42"], "")
+        sh.on(["git", "rev-parse", "refs/remotes/origin/develop"], SHAS["base"] + "\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        self.assertIn("\n# pr-data: Files on develop\n", text)
+        self.assertNotIn("Files on main", text)
+        self.assertIn("· 7. Files on develop\n", text)
+        self.assertIn("Every other touched file whole as it stood on develop where the pull request's branch split off", text)
+        self.assertIn("files               3 on develop; 2 added whole in the annotated diff only", term.said)
+        self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER[:-1] + ["Files on develop"])
 
     def test_plain_diff_flag(self):
         code, term, ctx = run_tool(self.root, yes=True, plain_diff=True)
@@ -1109,13 +1126,13 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
         self.assertIn("+    return chosen\n", diff)
         self.assertIn("     unittest.main()\n````", diff)
-        self.assertIn("· 6. Checks · 7. Diff · 8. Files at base", text)
+        self.assertIn("· 6. Checks · 7. Diff · 8. Files on main", text)
         self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:-2])
 
     def test_fenced_markdown_inside_markdown_survives(self):
         code, term, ctx = run_tool(self.root, yes=True)
-        base = self.section((self.root / "pr-data.txt").read_text(), "Files at base")
-        part = base.split("## docs/usage.md", 1)[1].split("\n## lib/widgets/catalog.py", 1)[0]
+        main = self.section((self.root / "pr-data.txt").read_text(), "Files on main")
+        part = main.split("## docs/usage.md", 1)[1].split("\n## lib/widgets/catalog.py", 1)[0]
         self.assertIn("\n````\n# Using the catalog", part)
         self.assertTrue(part.rstrip().endswith("````"))
 
@@ -1123,7 +1140,7 @@ class TestDiffAndFiles(unittest.TestCase):
         code, term, ctx = run_tool(self.root, yes=True, no_files=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
-        self.assertNotIn("# pr-data: Files at base", text)
+        self.assertNotIn("# pr-data: Files on main", text)
         self.assertIn("The touched files were left out (--no-files).", text)
         self.assertIn("· 6. Checks\n", text)
 
@@ -1157,11 +1174,17 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertTrue(pc.render_diff(c).startswith("`git diff m...h`, 0 lines, as git wrote it"))
         self.assertTrue(pc.render_diff(c).endswith("\n\n(empty)\n"))
         self.assertEqual(pc.render_file_list(c), "No files changed.\n")
-        self.assertEqual(pc.render_files({}, "h", "at the head"), "No files at the head.\n")
-        self.assertEqual(pc.render_files({"a.bin": "x\x00y"}, "h", "at the head"),
-                         "Every touched file whole at the head, at h.\n\n## a.bin\n\n(binary, 3 bytes, not inlined)\n")
-        self.assertEqual(pc.render_files({}, "h", "at the base", ["b.py", "a.py"], "removed by the pull request"),
-                         "Not repeated here, removed by the pull request; the Annotated diff section holds each whole: a.py, b.py.\n\nNo other files at the base.\n")
+        self.assertEqual(pc.render_files({}, "Every file.", "No files."), "No files.\n")
+        self.assertEqual(pc.render_files({"a.bin": "x\x00y"}, "Every file.", "No files."),
+                         "Every file.\n\n## a.bin\n\n(binary, 3 bytes, not inlined)\n")
+        self.assertEqual(pc.render_files({}, "Every other file.", "No other files.", ["A note.", "Another."]),
+                         "A note.\n\nAnother.\n\nNo other files.\n")
+        c.pr = {"baseRefName": "trunk"}
+        c.removed_paths = ["b.py", "a.py"]
+        self.assertEqual(pc.render_main_files(c),
+                         "Not repeated here, removed by the pull request; the Annotated diff section holds each whole: a.py, b.py.\n\nNo other touched files on trunk.\n")
+        c.removed_paths = []
+        self.assertEqual(pc.render_main_files(c), "No touched files on trunk.\n")
 
     def test_removed_files_are_not_repeated_at_the_base(self):
         c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="mb", head_sha="hd")
@@ -1172,9 +1195,12 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertEqual(sh.calls, [["git", "show", "mb:a.py"]])
         self.assertEqual((c.added_paths, c.removed_paths), (["new.py"], ["gone.py"]))
         self.assertEqual(c.head_paths, {"new.py", "b.py"})
-        self.assertEqual(term.said, ["files               1 at the base; 1 added and 1 removed whole in the annotated diff only"])
-        text = pc.render_files(c.base_files, "mb", "at the base", c.removed_paths, "removed by the pull request")
-        self.assertIn("holds each whole: gone.py.\n\nEvery other touched file whole at the base, at mb.\n\n## a.py\n\n1 lines.", text)
+        self.assertEqual(term.said, ["files               1 on main; 1 added and 1 removed whole in the annotated diff only"])
+        text = pc.render_main_files(c)
+        self.assertTrue(text.startswith(
+            "Not on main, added by the pull request; the Annotated diff section holds each whole: new.py.\n\n"
+            "Not repeated here, removed by the pull request; the Annotated diff section holds each whole: gone.py.\n\n"
+            "Every other touched file whole as it stood on main where the pull request's branch split off (commit mb).\n\n## a.py\n\n1 lines."), text)
         self.assertEqual(pc.change_label(pc.FileChange("modified", "a.py", None, 3, None)), "modified (+3 -0): a.py")
 
     def test_git_diff_failure_stops(self):
@@ -1307,6 +1333,21 @@ class TestTheFile(unittest.TestCase):
         self.assertEqual(pc.split_sections("no heading\n"), [])
         self.assertEqual(pc.split_sections("# pr-data: A\n\nx\n# pr-data: B\n"), [("A", "\nx"), ("B", "")])
 
+    def test_head_and_base_are_said_only_in_the_header(self):
+        """The two sides are the pull request's branch and the branch it merges into,
+        named so everywhere the tool writes; git's head and base stay only in the Header's
+        record of the commits the diff was taken between."""
+        sh = fixture_shell(self.root).on([*TestRelatedAndRedact.GREP, SHAS["head"]], f"{SHAS['head']}:README.md\n")
+        sh.on(["git", "show", f"{SHAS['head']}:README.md"], "Use filtered().\n")
+        code, term, ctx = run_tool(self.root, sh, yes=True, plain_diff=True, related=True)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        body = "\n".join(b for n, b in pc.split_sections(text) if n != "Header")
+        for words in ("at the head", "at the base", "at head", "at base"):
+            self.assertNotIn(words, body, words)
+            self.assertFalse(any(words in line for line in term.said), words)
+        self.assertNotIn("Files at", text)
+
     def test_nothing_is_fetched_twice(self):
         code, term, ctx = run_tool(self.root, yes=True)
         calls = [tuple(c) for c in ctx.shell.calls]
@@ -1354,7 +1395,7 @@ class TestRelatedAndRedact(unittest.TestCase):
         code, term, ctx = run_tool(self.root, sh, yes=True, related=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
-        self.assertIn("# pr-data: Related files\n\nEvery touched file whole related to the change, at the head, at " + head, text)
+        self.assertIn("# pr-data: Related files\n\nEvery file related to the change, whole, on the pull request's branch at " + head, text)
         self.assertIn("## lib/widgets/service.py", text)
         self.assertIn("## README.md", text)
         self.assertNotIn("## lib/widgets/catalog.py\n\n1 lines", text)
@@ -1472,11 +1513,11 @@ class TestUses(unittest.TestCase):
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         sec = text.split("# pr-data: Files the diff uses\n", 1)[1]
-        self.assertTrue(sec.startswith(f"\nFiles at the head, at {head}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. Looked for the definitions of 1 identifiers.\n\n## docs/notes.md\n\nDefines: Catalog.\n\n1 lines.\n\n```\nCatalog = the list\n```\n\n\n## lib/widgets/legacy.py\n\nDefines: Catalog.\n\n2 lines."), sec[:400])
+        self.assertTrue(sec.startswith(f"\nFiles on the pull request's branch, at {head}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. Looked for the definitions of 1 identifiers.\n\n## docs/notes.md\n\nDefines: Catalog.\n\n1 lines.\n\n```\nCatalog = the list\n```\n\n\n## lib/widgets/legacy.py\n\nDefines: Catalog.\n\n2 lines."), sec[:400])
         self.assertNotIn("## lib/widgets/catalog.py\n\nDefines", text)
         self.assertIn("Files the diff uses (--uses): looked for the definitions of 1 identifiers; 2 files define one of them.", text)
-        self.assertIn("· 7. Files at base · 8. Files the diff uses\n", text)
-        self.assertIn("uses                2 files at the head", term.said)
+        self.assertIn("· 7. Files on main · 8. Files the diff uses\n", text)
+        self.assertIn("uses                2 files on the pull request's branch", term.said)
         self.assertEqual(ctx.shell.gh_calls, 17)
 
     def test_uses_before_related_and_both_numbered(self):

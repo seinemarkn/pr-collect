@@ -10,7 +10,7 @@ number, and read every review thread at its place.
   made in. Written again in place on every run.
 - Plain GitHub-flavoured Markdown. Everything that is code, a log, a diff, or a file's
   contents sits in a fenced block.
-- Eight sections, always in this order, each under a top-level heading of one fixed form:
+- Seven sections, always in this order, each under a top-level heading of one fixed form:
 
 ```
 # pr-data: Header
@@ -19,14 +19,19 @@ number, and read every review thread at its place.
 # pr-data: Annotated diff
 # pr-data: Commits
 # pr-data: Checks
-# pr-data: Files at head
-# pr-data: Files at base
+# pr-data: Files on main
 ```
 
-  `--no-files` leaves the last two out. `--plain-diff` adds `# pr-data: Diff` between
-  Checks and Files at head; `--uses` adds `# pr-data: Files the diff uses` and `--related`
-  adds `# pr-data: Related files`, in that order, at the end. The Header's **Sections**
-  line lists what is present, numbered in order.
+  The last heading names the branch the pull request merges into: `Files on main` for a
+  pull request into `main`, `Files on develop` for one into `develop`. `--no-files` leaves
+  it out. `--plain-diff` adds `# pr-data: Diff` between Checks and Files on main; `--uses`
+  adds `# pr-data: Files the diff uses` and `--related` adds `# pr-data: Related files`, in
+  that order, at the end. The Header's **Sections** line lists what is present, numbered in
+  order.
+
+Two phrases recur: **the pull request's branch** is the branch under review, as it is now;
+**main** (or the branch's real name) is the branch the pull request merges into, as it
+stood where the pull request's branch split off from it, which git calls the merge base.
 
 ## 2. Splitting the file
 
@@ -34,7 +39,7 @@ A section heading is a line matching `^# pr-data: (.+)$`. Every line after it, u
 next such line, is that section's body.
 
 Fenced blocks inside a section can themselves hold lines beginning with `#` (a Markdown
-file at the head, a shell script), so a strict splitter tracks fences: a line of three or
+file among the touched files, a shell script), so a strict splitter tracks fences: a line of three or
 more backticks opens a fence, and the same number of backticks closes it; heading lines
 inside a fence are content. pr-collect always chooses a fence longer than any run of
 backticks in the content it wraps, so a fence is unambiguous. A simple splitter that
@@ -49,10 +54,10 @@ A list of `- **Name:** value` lines:
 |---|---|
 | **Ticket** | the ticket number, the full key when its letters were seen, and where it was read from |
 | **Pull request** | number, title as a link, repository, host |
-| **Branch** | the head branch and the base branch |
-| **Head**, **Base**, **Merge base** | the three full shas the diff was taken between |
+| **Branch** | the pull request's branch and the branch it merges into |
+| **Head**, **Base**, **Merge base** | the three full shas the diff was taken between, in git's words: the tip of the pull request's branch, the tip of the branch it merges into, and where the two split |
 | **Taken** | time in UTC, the `gh` login that ran it, the pr-collect version |
-| **Checks** | one status line: counts and names by outcome, and whether the head is deployed |
+| **Checks** | one status line: counts and names by outcome, and whether the pull request's commit is deployed |
 | **Counts** | comments, review threads (unresolved), commits, failed jobs, files changed |
 | **Sections** | the sections present, numbered, in order |
 | **Not collected** | parts that could not be fetched, each with why (only when any) |
@@ -61,7 +66,7 @@ A list of `- **Name:** value` lines:
 
 ## 4. Pull request
 
-The record as a list (number, author, state, base and head with shas, size, labels,
+The record as a list (number, author, state, the two branches with their shas, size, labels,
 assignees, reviewers requested, review decision, mergeability, dates, linked issues,
 milestone, fork), then `## Description` with the body verbatim.
 
@@ -149,24 +154,37 @@ One sentence naming the `git diff <merge base>...<head>` command and its length,
 patch in a ```` ```diff ```` block exactly as git wrote it. It applies with `git apply`
 once lifted out of the fence. Left out by default: the Annotated diff holds every line.
 
-## 11. Files at head, Files at base, Files the diff uses, Related files
+## 11. Files on main
 
-`## <path>` per file, sorted by path, then `<n> lines.` and the file in a fenced block.
-The head section holds every file the diff touches that still exists at the head, except
-the files the pull request **added**: those are whole in the Annotated diff already, so the
-section opens with one line naming them (`Not repeated here, added by the pull request; …`)
-and goes on with the others. The base section likewise holds every touched file as it was
-at the merge base, under its old path, except the files the pull request **removed**, named
-the same way. A binary file says `(binary, <n> bytes, not inlined)`; a file git could not
-show says `(not readable; see the header)`.
+Every file the diff touches, whole, **as it stood on the branch the pull request merges
+into at the merge base**: the file before the change, with no diff in it. `## <path>` per
+file, sorted by path and under the file's path on that branch (the old path for a rename),
+then `<n> lines.` and the file in a fenced block. The section opens with one sentence
+naming the branch and the commit: `Every touched file whole as it stood on main where the
+pull request's branch split off (commit <sha>).`
 
-The **Files the diff uses** section (`--uses`) holds files at the head, not touched by the
-diff, that define a class, module, constant, method, scope, factory, or association the
-diff's added lines name; each file's heading is followed by `Defines: <names>.` The
-**Related files** section (`--related`) holds files at the head that name an identifier the
-diff defines. Both are capped at 25 files; the Header's **Notes** say how many were found.
+Two kinds of touched file are named, not inlined, each in one line before that sentence
+(which then says `Every other touched file …`): the files the pull request **added**, which
+did not exist on the branch (`Not on main, added by the pull request; the Annotated diff
+section holds each whole: …`), and the files it **removed**, which the Annotated diff shows
+whole as removed lines (`Not repeated here, removed by the pull request; …`). A binary file
+says `(binary, <n> bytes, not inlined)`; a file git could not show says `(not readable; see
+the header)`. With no file to inline the section is the one line `No touched files on
+main.` (or `No other touched files …` after the named ones).
 
-## 12. Reading notes
+Read beside the Annotated diff, this section gives the file as the pull request leaves it:
+the hunks say which lines change and the gutter says where.
+
+## 12. Files the diff uses, Related files
+
+Both hold files from the pull request's branch that the diff does **not** touch, in the
+same per-file form. **Files the diff uses** (`--uses`) are files that define a class, module,
+constant, method, scope, factory, or association the diff's added lines name; each file's
+heading is followed by `Defines: <names>.` **Related files** (`--related`) are files that
+name an identifier the diff defines. Both are capped at 25 files; the Header's **Notes** say
+how many were found.
+
+## 13. Reading notes
 
 - Shas are full in the Header and in `Full sha:` lines, ten characters elsewhere.
 - Nothing in the file is summarised or shortened except the failing logs, which say so.

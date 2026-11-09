@@ -11,14 +11,17 @@ One command, run on the branch of the pull request, gathers:
   threads with their replies, and the events between them (commits pushed, force pushes,
   labels, review requests, draft and ready marks, renames, merges);
 - the commits, oldest first, with the files each touched;
-- the checks and GitHub Actions runs at the head, one line per passing job, and for a
-  failed job its steps, annotations, and the failing steps' logs;
+- the checks and GitHub Actions runs on the pull request's branch, one line per passing
+  job, and for a failed job its steps, annotations, and the failing steps' logs;
 - the branch diff from git, **annotated**: old and new line numbers on every line and every
   review thread written in right after the line it was made on;
-- every touched file whole, at the head and at the base. A file the pull request adds or
-  removes is already whole in the annotated diff and is named rather than repeated.
+- every touched file whole **as it stands on main**, the branch the pull request merges
+  into, at the point the pull request's branch split off: the file before the change, with
+  no diff in it. Read beside the annotated diff, it gives the file as the pull request
+  leaves it. A file the pull request adds or removes is already whole in the annotated diff
+  and is named rather than repeated.
 
-The file is plain Markdown in eight sections under fixed headings, so a person or a program
+The file is plain Markdown in seven sections under fixed headings, so a person or a program
 can read it anywhere and split it apart. Three more sections come with the flags below. The exact layout is in
 [PR-DATA-FORMAT.md](PR-DATA-FORMAT.md).
 
@@ -67,7 +70,7 @@ conversation        2 comments, 2 reviews, 5 review threads (3 unresolved)
 commits             3
 checks              1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); not deployed
 diff                5 files, +41 -0
-files               3 at the head, 3 at the base; 2 added whole in the annotated diff only
+files               3 on main; 2 added whole in the annotated diff only
 wrote /home/you/src/widgets/pr-data.txt
 Do not commit pr-data.txt: it holds other people's comments and code.
 ```
@@ -86,16 +89,17 @@ pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff
 - `-t TICKET` — the ticket number (or full key, such as `ABC-123`) when the branch name
   does not carry it. Nothing is asked.
 - `--yes` — take the ticket number read from the branch name without asking.
-- `--no-files` — leave out the two sections holding the touched files whole, for a shorter
+- `--no-files` — leave out the section holding the touched files whole, for a shorter
   file.
 - `--full-logs` — keep every failing step's log whole instead of its last 200 lines.
 - `--plain-diff` — add the branch diff a second time, as git wrote it, in a section of its
   own, for `git apply`. The annotated diff already holds every line.
-- `--uses` — add a section of files at the head that define what the diff uses: a class,
-  a constant, a method, or a factory named on an added line, up to 25 files, each saying
-  what it defines. This is what a reader needs to judge a call the diff makes.
-- `--related` — add a section of files at the head that name an identifier the diff
-  defines (a method, a class, a constant), up to 25, so a reader can see who else uses it.
+- `--uses` — add a section of files on the pull request's branch that define what the diff
+  uses: a class, a constant, a method, or a factory named on an added line, up to 25 files,
+  each saying what it defines. This is what a reader needs to judge a call the diff makes.
+- `--related` — add a section of files on the pull request's branch that name an identifier
+  the diff defines (a method, a class, a constant), up to 25, so a reader can see who else
+  uses it.
 - `--redact PATTERN` — a regular expression replaced with `[REDACTED]` everywhere but the
   header; repeat it for several. Line numbers and commit shas are left alone. The header
   counts the replacements per section.
@@ -120,8 +124,8 @@ noted in the header, but the branch's number stands.
 
 - It never writes anything but `pr-data.txt`, and only at the root of the clone.
 - It never sends the file anywhere. What you do with it next is yours.
-- It never commits, pushes, or changes the repository; the fetch it makes is of the base
-  branch and the pull request's head into `refs/remotes/origin/`.
+- It never commits, pushes, or changes the repository; the fetch it makes is of the branch
+  the pull request merges into and of the pull request's branch, into `refs/remotes/origin/`.
 - It never reads an issue tracker. The ticket number is read from the branch name and
   nothing more.
 - It never handles a token. Logging in is `gh`'s job.

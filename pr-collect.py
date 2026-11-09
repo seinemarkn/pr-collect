@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 OUTPUT_NAME = "pr-data.txt"
 MIN_TICKET_NUMBER = 100
@@ -450,17 +450,22 @@ class Collected:
     options_full_logs: bool = False
     patch: str = ""
     files: list = field(default_factory=list)
-    base_files: dict = field(default_factory=dict)  # path -> text as it stood at the merge base
-    added_paths: list = field(default_factory=list)  # added by the pull request: not at the merge base; whole in the annotated diff
+    main_files: dict = field(default_factory=dict)  # path -> text as it stood on the base branch at the merge base
+    added_paths: list = field(default_factory=list)  # added by the pull request: not on the base branch; whole in the annotated diff
     removed_paths: list = field(default_factory=list)  # removed by it: whole in the annotated diff, not repeated
     related_files: dict = field(default_factory=dict)
     uses_names: list = field(default_factory=list)  # the identifiers the diff uses, looked for
-    uses_files: dict = field(default_factory=dict)  # path -> text, files at the head defining one of them
+    uses_files: dict = field(default_factory=dict)  # path -> text, files on the pull request's branch defining one of them
     uses_defines: dict = field(default_factory=dict)  # path -> the names it defines
 
     @property
+    def base_branch(self) -> str:
+        """The branch the pull request merges into, usually main; the files section is named for it."""
+        return self.pr.get("baseRefName") or "main"
+
+    @property
     def head_paths(self) -> set:
-        """Every touched path that exists at the head, whether or not it is in the head section."""
+        """Every touched path that exists on the pull request's branch."""
         return {ch.path for ch in self.files if ch.at_head}
 
 
@@ -473,15 +478,20 @@ class Section:
 HEADING_PREFIX = "# pr-data: "
 SECTION_ORDER = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Files at base",
+    "Checks", "Files on main",
 ]
 # Every section that can appear, in the order it appears: the seven above, plus "Diff"
 # (--plain-diff) between Checks and the files, then "Files the diff uses" (--uses) and
-# "Related files" (--related) last.
+# "Related files" (--related) last. "Files on main" carries the real name of the branch
+# the pull request merges into: "Files on develop" for a pull request into develop.
 SECTION_ORDER_ALL = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Diff", "Files at base", "Files the diff uses", "Related files",
+    "Checks", "Diff", "Files on main", "Files the diff uses", "Related files",
 ]
+
+
+def main_files_section_name(c: "Collected") -> str:
+    return f"Files on {c.base_branch}"
 
 
 def fence_for(text: str) -> str:
@@ -927,7 +937,7 @@ def stat_label(f: FileStat) -> str:
 
 def render_commits(c: Collected) -> str:
     if not c.commits:
-        return "No commits between the merge base and the head.\n"
+        return "No commits between the merge base and the pull request's branch.\n"
     out = []
     for i, cm in enumerate(c.commits, 1):
         out.append(f"## {i}. {short(cm.sha)} · {cm.author} <{cm.email}> · {cm.date}")
@@ -1054,7 +1064,7 @@ def fetch_checks(ctx: Context, c: Collected) -> None:
 def status_line(c: Collected) -> str:
     items = [(r.get("name") or "?", outcome(r)) for r in c.check_runs] + [(s.get("context") or "?", outcome(s)) for s in c.statuses]
     if not items:
-        return "no checks reported at the head"
+        return "no checks reported on the pull request's branch"
     groups = {"failing": [], "successful": [], "skipped": [], "in progress": [], "other": []}
     for name, o in items:
         key = ("successful" if o == "success" else "failing" if o in FAILING else "skipped" if o in SKIPPED
@@ -1236,17 +1246,17 @@ def file_at(ctx: Context, sha: str, path: str) -> str | None:
 
 
 def fetch_files(ctx: Context, c: Collected) -> None:
-    """Every touched file whole as it stood at the merge base. A file the pull request
-    added was not there; a file it removed is already whole in the annotated diff; both
-    are named, not repeated."""
+    """Every touched file whole as it stood on the base branch at the merge base. A file
+    the pull request added was not there; a file it removed is already whole in the
+    annotated diff; both are named, not repeated."""
     for ch in c.files:
         if ch.status == "added":
             c.added_paths.append(ch.path)
         elif ch.status == "removed":
             c.removed_paths.append(ch.base_path)
         else:
-            c.base_files[ch.base_path] = file_at(ctx, c.merge_base, ch.base_path)
-    line = f"files               {len(c.base_files)} at the base"
+            c.main_files[ch.base_path] = file_at(ctx, c.merge_base, ch.base_path)
+    line = f"files               {len(c.main_files)} on {c.base_branch}"
     skipped = [f"{len(c.added_paths)} added" if c.added_paths else "", f"{len(c.removed_paths)} removed" if c.removed_paths else ""]
     if any(skipped):
         line += f"; {' and '.join(x for x in skipped if x)} whole in the annotated diff only"
@@ -1274,18 +1284,34 @@ def render_diff(c: Collected) -> str:
     return intro + fenced(c.patch, "diff")
 
 
-def render_files(files: dict[str, str | None], sha: str, label: str, skipped: list[str] = (), why: str = "") -> str:
+def render_files(files: dict[str, str | None], intro: str, empty: str, notes: list[str] = ()) -> str:
+    """A files section: the notes (one line each), then the intro and one block per file,
+    or the one line that says there are none."""
     out = []
-    if skipped:
-        out += [f"Not repeated here, {why}; the Annotated diff section holds each whole: {', '.join(sorted(skipped))}.", ""]
-    other = "other " if skipped else ""
+    for note in notes:
+        out += [note, ""]
     if not files:
-        out.append(f"No {other}files {label}.")
+        out.append(empty)
         return "\n".join(out) + "\n"
-    out += [f"Every {other}touched file whole {label}, at {sha}.", ""]
+    out += [intro, ""]
     for path in sorted(files):
         out += file_block(path, files[path])
     return "\n".join(out)
+
+
+def render_main_files(c: Collected) -> str:
+    """The touched files whole as they stood on the base branch where the pull request's
+    branch split off. A file the pull request added was not there yet, and a file it
+    removed is whole in the annotated diff; both are named, not repeated."""
+    branch = c.base_branch
+    notes = []
+    if c.added_paths:
+        notes.append(f"Not on {branch}, added by the pull request; the Annotated diff section holds each whole: {', '.join(sorted(c.added_paths))}.")
+    if c.removed_paths:
+        notes.append(f"Not repeated here, removed by the pull request; the Annotated diff section holds each whole: {', '.join(sorted(c.removed_paths))}.")
+    other = "other " if notes else ""
+    intro = f"Every {other}touched file whole as it stood on {branch} where the pull request's branch split off (commit {c.merge_base})."
+    return render_files(c.main_files, intro, f"No {other}touched files on {branch}.", notes)
 
 
 def file_block(path: str, text: str | None, extra: str | None = None) -> list[str]:
@@ -1565,7 +1591,7 @@ def fetch_related(ctx: Context, c: Collected) -> None:
     if len(paths) > RELATED_CAP:
         note += f", the first {RELATED_CAP} included"
     ctx.notes.append(note + ".")
-    ctx.terminal.say(f"related             {len(chosen)} files at the head")
+    ctx.terminal.say(f"related             {len(chosen)} files on the pull request's branch")
 
 
 # ---------------------------------------------------------------------------
@@ -1671,11 +1697,11 @@ def fetch_uses(ctx: Context, c: Collected) -> None:
     if len(paths) > USES_CAP:
         note += f", the first {USES_CAP} included"
     ctx.notes.append(note + ".")
-    ctx.terminal.say(f"uses                {len(chosen)} files at the head")
+    ctx.terminal.say(f"uses                {len(chosen)} files on the pull request's branch")
 
 
 def render_uses(c: Collected) -> str:
-    out = [f"Files at the head, at {c.head_sha}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. "
+    out = [f"Files on the pull request's branch, at {c.head_sha}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. "
            f"Looked for the definitions of {len(c.uses_names)} identifiers.", ""]
     for path in sorted(c.uses_files):
         out += file_block(path, c.uses_files[path], "Defines: " + ", ".join(c.uses_defines[path]) + ".")
@@ -1752,8 +1778,8 @@ def parse_args(argv: list[str] | None = None) -> Options:
     parser.add_argument("--no-files", action="store_true", help="leave out the section holding the touched files whole")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
     parser.add_argument("--plain-diff", action="store_true", help="add the branch diff a second time as git wrote it, for git apply")
-    parser.add_argument("--uses", action="store_true", help="add files at the head that define a class, constant, method, or factory the diff uses")
-    parser.add_argument("--related", action="store_true", help="add files at the head that name an identifier the diff adds or changes")
+    parser.add_argument("--uses", action="store_true", help="add files on the pull request's branch that define a class, constant, method, or factory the diff uses")
+    parser.add_argument("--related", action="store_true", help="add files on the pull request's branch that name an identifier the diff adds or changes")
     parser.add_argument("--redact", action="append", default=[], metavar="PATTERN",
                         help="a regular expression to replace with [REDACTED] everywhere but the header; may be repeated")
     parser.add_argument("--version", action="version", version=f"pr-collect {__version__}")
@@ -1806,12 +1832,12 @@ def collect(ctx: Context) -> Path:
     if ctx.options.plain_diff:
         sections.append(Section("Diff", render_diff(c)))
     if not ctx.options.no_files:
-        sections.append(Section("Files at base", render_files(
-            c.base_files, c.merge_base, "at the base (the merge base)", c.removed_paths, "removed by the pull request")))
+        sections.append(Section(main_files_section_name(c), render_main_files(c)))
     if c.uses_files:
         sections.append(Section("Files the diff uses", render_uses(c)))
     if c.related_files:
-        sections.append(Section("Related files", render_files(c.related_files, c.head_sha, "related to the change, at the head")))
+        sections.append(Section("Related files", render_files(
+            c.related_files, f"Every file related to the change, whole, on the pull request's branch at {c.head_sha}.", "No related files.")))
     apply_redactions(ctx, sections)
     existed = (repo.root / OUTPUT_NAME).exists()
     names = ["Header"] + [s.name for s in sections]

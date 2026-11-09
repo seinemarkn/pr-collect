@@ -4,10 +4,10 @@
 - **Pull request:** #42 [[DEMO-123] Add a filter to the widget catalog](https://github.com/example/widgets/pull/42) on example/widgets (github.com)
 - **Branch:** DEMO-123-add-widget-filter into main
 - **Head:** 22abb9a877c8810578042c25ccf0b591950f23f8 · **Base:** 5971d32b31e861e454e64b13bcebc308cfff6c9a · **Merge base:** 8c25148139b155302e64998def3fc5cf6fdc80cf
-- **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.1.0
+- **Taken:** 2026-03-05T10:30:00Z by @reviewer-one with pr-collect 0.2.0
 - **Checks:** 1 failing (tests); 2 successful (lint, ci/coverage); 1 skipped (docs); 1 in progress (build / image); not deployed
 - **Counts:** 9 comments, 5 review threads (3 unresolved), 3 commits, 1 failed jobs, 5 files changed
-- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files at base
+- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files on main
 - **Notes:**
   - Secrets that GitHub masks in Actions logs arrive masked; nothing else is masked. Look through the file before carrying it anywhere else.
   - The diff reconciles with GitHub's file list: 5 files, +41 -0.
@@ -582,9 +582,11 @@ Status at 22abb9a877: 1 failing (tests); 2 successful (lint, ci/coverage); 1 ski
 
 - SKIP job docs · skipped · 1s
 
-# pr-data: Files at base
+# pr-data: Files on main
 
-Every touched file whole at the base (the merge base), at 8c25148139b155302e64998def3fc5cf6fdc80cf.
+Not on main, added by the pull request; the Annotated diff section holds each whole: docs/diagram.png, lib/widgets/filter.py.
+
+Every other touched file whole as it stood on main where the pull request's branch split off (commit 8c25148139b155302e64998def3fc5cf6fdc80cf).
 
 ## docs/usage.md
 
