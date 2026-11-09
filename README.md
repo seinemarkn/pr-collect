@@ -80,8 +80,10 @@ A second run on the same branch writes the file again in place.
 ### Options
 
 ```
-pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff]
-           [--uses] [--related] [--redact PATTERN] [--version]
+pr-collect [number] [-t TICKET] [--yes]
+           [--no-pull-request] [--no-conversation] [--no-diff] [--no-commits]
+           [--no-checks] [--no-main-files]
+           [--full-logs] [--plain-diff] [--uses] [--related] [--redact PATTERN] [--version]
 ```
 
 - `number` — the pull request number, for a branch with more than one open pull request
@@ -89,8 +91,6 @@ pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff
 - `-t TICKET` — the ticket number (or full key, such as `ABC-123`) when the branch name
   does not carry it. Nothing is asked.
 - `--yes` — take the ticket number read from the branch name without asking.
-- `--no-files` — leave out the section holding the touched files whole, for a shorter
-  file.
 - `--full-logs` — keep every failing step's log whole instead of its last 200 lines.
 - `--plain-diff` — add the branch diff a second time, as git wrote it, in a section of its
   own, for `git apply`. The annotated diff already holds every line.
@@ -103,6 +103,35 @@ pr-collect [number] [-t TICKET] [--yes] [--no-files] [--full-logs] [--plain-diff
 - `--redact PATTERN` — a regular expression replaced with `[REDACTED]` everywhere but the
   header; repeat it for several. Line numbers and commit shas are left alone. The header
   counts the replacements per section.
+
+#### Leaving sections out
+
+Each of the six default sections after the header has a flag that removes it. Name what
+you do not want; what you do not name stays. The header is always written and lists the
+sections present and the ones left out.
+
+- `--no-pull-request` — the pull request's record and description.
+- `--no-conversation` — the comments, reviews, and events. The review threads are still
+  fetched when the annotated diff stays, since it places them at their lines.
+- `--no-diff` — the annotated diff. The git diff is still taken when something that stays
+  needs the file list: the files on main, `--plain-diff`, `--uses`, or `--related`.
+- `--no-commits` — the commits.
+- `--no-checks` — the checks, and no call is made for checks, Actions runs, or logs; the
+  header's **Checks** line says `not collected (--no-checks)`.
+- `--no-main-files` — the touched files whole as they stand on main, for a shorter file.
+
+Two examples. A file without whole files, for a quick read:
+
+```sh
+pr-collect --no-main-files
+```
+
+The smallest file that still grounds every hunk: the record, the annotated diff with the
+review threads at their lines, and the files on main to read them against:
+
+```sh
+pr-collect --no-conversation --no-commits --no-checks
+```
 
 ### The ticket number
 

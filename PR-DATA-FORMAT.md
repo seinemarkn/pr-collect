@@ -23,11 +23,14 @@ number, and read every review thread at its place.
 ```
 
   The last heading names the branch the pull request merges into: `Files on main` for a
-  pull request into `main`, `Files on develop` for one into `develop`. `--no-files` leaves
-  it out. `--plain-diff` adds `# pr-data: Diff` between Checks and Files on main; `--uses`
-  adds `# pr-data: Files the diff uses` and `--related` adds `# pr-data: Related files`, in
-  that order, at the end. The Header's **Sections** line lists what is present, numbered in
-  order.
+  pull request into `main`, `Files on develop` for one into `develop`. `--plain-diff` adds
+  `# pr-data: Diff` between Checks and Files on main; `--uses` adds
+  `# pr-data: Files the diff uses` and `--related` adds `# pr-data: Related files`, in that
+  order, at the end.
+  Each section after the Header can be left out by its flag (`--no-pull-request`,
+  `--no-conversation`, `--no-diff`, `--no-commits`, `--no-checks`, `--no-main-files`); the
+  Header is always present. The Header's **Sections** line lists exactly what is present,
+  numbered in order, and its **Notes** name each section left out and the flag that did it.
 
 Two phrases recur: **the pull request's branch** is the branch under review, as it is now;
 **main** (or the branch's real name) is the branch the pull request merges into, as it
@@ -57,11 +60,11 @@ A list of `- **Name:** value` lines:
 | **Branch** | the pull request's branch and the branch it merges into |
 | **Head**, **Base**, **Merge base** | the three full shas the diff was taken between, in git's words: the tip of the pull request's branch, the tip of the branch it merges into, and where the two split |
 | **Taken** | time in UTC, the `gh` login that ran it, the pr-collect version |
-| **Checks** | one status line: counts and names by outcome, and whether the pull request's commit is deployed |
-| **Counts** | comments, review threads (unresolved), commits, failed jobs, files changed |
+| **Checks** | one status line: counts and names by outcome, and whether the pull request's commit is deployed; `not collected (--no-checks)` when the Checks section was left out |
+| **Counts** | comments, review threads (unresolved), commits, failed jobs, files changed; only what was collected, so a count whose section was left out is missing, and the line is absent when nothing was counted |
 | **Sections** | the sections present, numbered, in order |
 | **Not collected** | parts that could not be fetched, each with why (only when any) |
-| **Notes** | what the run noticed: the reconciliation of the diff against GitHub's file list, a ticket number that differs in the title, redaction counts, the masking note |
+| **Notes** | what the run noticed: the masking note, each section left out and its flag (`The Checks section was left out (--no-checks).`), the reconciliation of the diff against GitHub's file list, a ticket number that differs in the title, redaction counts |
 | **Requests to GitHub** | how many `gh` calls the run made |
 
 ## 4. Pull request

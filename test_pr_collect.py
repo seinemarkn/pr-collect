@@ -239,12 +239,25 @@ class TestParseArgs(unittest.TestCase):
         opts = pc.parse_args([])
         self.assertEqual(opts, pc.Options())
 
+    NO_FLAGS = ("--no-pull-request", "--no-conversation", "--no-diff", "--no-commits", "--no-checks", "--no-main-files")
+
     def test_every_flag(self):
-        opts = pc.parse_args(["42", "-t", "123", "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "A", "--redact", "B"])
+        opts = pc.parse_args(["42", "-t", "123", "--yes", *self.NO_FLAGS, "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "A", "--redact", "B"])
         self.assertEqual(opts.number, 42)
         self.assertEqual(opts.ticket, "123")
-        self.assertTrue(opts.yes and opts.no_files and opts.full_logs and opts.plain_diff and opts.uses and opts.related)
+        self.assertTrue(opts.yes and opts.full_logs and opts.plain_diff and opts.uses and opts.related)
+        self.assertTrue(opts.no_pull_request and opts.no_conversation and opts.no_diff and opts.no_commits and opts.no_checks and opts.no_main_files)
         self.assertEqual(opts.redact, ["A", "B"])
+        for flag in self.NO_FLAGS:
+            one = pc.parse_args([flag])
+            self.assertEqual(sum(1 for f in pc.Options.__dataclass_fields__ if f.startswith("no_") and getattr(one, f)), 1, flag)
+
+    def test_the_old_no_files_flag_is_refused(self):
+        with self.assertRaises(SystemExit) as cm:
+            with self.redirected() as (_, err):
+                pc.parse_args(["--no-files"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("--no-files", err.getvalue())
 
     def test_version_and_help_exit(self):
         for flag in ("--version", "--help"):
@@ -258,8 +271,9 @@ class TestParseArgs(unittest.TestCase):
             with self.redirected() as (out, _):
                 pc.parse_args(["--help"])
         text = out.getvalue()
-        for flag in ("-t", "--ticket", "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "--version", "number"):
+        for flag in ("-t", "--ticket", "--yes", *self.NO_FLAGS, "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "--version", "number"):
             self.assertIn(flag, text)
+        self.assertIn("leaving sections out", text)
 
     @contextmanager
     def redirected(self):
@@ -1136,14 +1150,6 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("\n````\n# Using the catalog", part)
         self.assertTrue(part.rstrip().endswith("````"))
 
-    def test_no_files_flag(self):
-        code, term, ctx = run_tool(self.root, yes=True, no_files=True)
-        self.assertEqual(code, 0, term.warned)
-        text = (self.root / "pr-data.txt").read_text()
-        self.assertNotIn("# pr-data: Files on main", text)
-        self.assertIn("The touched files were left out (--no-files).", text)
-        self.assertIn("· 6. Checks\n", text)
-
     def test_reconciliation_differences_are_said(self):
         sh = fixture_shell(self.root).on(["gh", "api", "--hostname", "github.com", "--paginate", "repos/example/widgets/pulls/42/files"],
             '[{"filename": "docs/diagram.png", "additions": 0, "deletions": 0}, {"filename": "lib/widgets/other.py", "additions": 50, "deletions": 2}]')
@@ -1214,6 +1220,136 @@ class TestDiffAndFiles(unittest.TestCase):
         r = sh.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\x00b\\xff')"])
         self.assertIn("\x00", r.stdout)
         self.assertEqual(len(r.stdout), 4)
+
+
+class TestLeavingSectionsOut(unittest.TestCase):
+    """Each --no- flag leaves one default section out and skips its fetch unless a section
+    that stays needs the same data; the Header names what was left out; every other
+    section is byte for byte what it is without the flag."""
+
+    GOLDEN = FIXTURES / "expected" / "pr-data.txt"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.golden = dict(pc.split_sections(self.GOLDEN.read_text()))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_without(self, **opts):
+        code, term, ctx = run_tool(self.root, yes=True, **opts)
+        self.assertEqual(code, 0, term.warned)
+        text = (self.root / "pr-data.txt").read_text()
+        return text, dict(pc.split_sections(text)), term, ctx
+
+    def check_left_out(self, sections, name, flag):
+        header = sections["Header"]
+        self.assertNotIn(name, sections)
+        self.assertIn(f"  - The {name} section was left out ({flag}).\n", header)
+        listed = header.split("- **Sections:** ", 1)[1].split("\n", 1)[0]
+        self.assertNotIn(name, listed)
+        self.assertEqual(listed, " · ".join(f"{i}. {n}" for i, n in enumerate(sections, 1)))
+        for n, body in sections.items():
+            if n != "Header":
+                self.assertEqual(body, self.golden[n], n)
+
+    def gh_paths(self, ctx):
+        return [" ".join(c) for c in ctx.shell.calls if c[0] == "gh"]
+
+    def test_no_pull_request(self):
+        text, sections, term, ctx = self.run_without(no_pull_request=True)
+        self.check_left_out(sections, "Pull request", "--no-pull-request")
+        self.assertEqual(list(sections), ["Header", "Conversation", "Annotated diff", "Commits", "Checks", "Files on main"])
+        self.assertEqual(ctx.shell.gh_calls, 17)  # the record is still read: the Header and the ticket check need it
+
+    def test_no_conversation_still_fetches_the_threads_for_the_annotated_diff(self):
+        text, sections, term, ctx = self.run_without(no_conversation=True)
+        self.check_left_out(sections, "Conversation", "--no-conversation")
+        self.assertIn("**Review thread** on lib/widgets/catalog.py line 38 (new side) · resolved", sections["Annotated diff"])
+        self.assertFalse(any(p.endswith(("/comments", "/reviews", "/timeline")) for p in self.gh_paths(ctx)))
+        self.assertEqual(ctx.shell.gh_calls, 14)
+        self.assertIn("- **Counts:** 5 review threads (3 unresolved), 3 commits, 1 failed jobs, 5 files changed\n", sections["Header"])
+        self.assertIn("threads             5 review threads (3 unresolved), for the annotated diff", term.said)
+        self.assertFalse(any(l.startswith("conversation") for l in term.said))
+
+    def test_no_conversation_and_no_diff_fetch_no_threads(self):
+        text, sections, term, ctx = self.run_without(no_conversation=True, no_diff=True)
+        self.check_left_out(sections, "Conversation", "--no-conversation")
+        self.check_left_out(sections, "Annotated diff", "--no-diff")
+        self.assertFalse(any("graphql" in p for p in self.gh_paths(ctx)))
+        self.assertIn("- **Counts:** 3 commits, 1 failed jobs, 5 files changed\n", sections["Header"])
+
+    def test_no_diff_still_lists_the_files_for_files_on_main(self):
+        text, sections, term, ctx = self.run_without(no_diff=True)
+        self.check_left_out(sections, "Annotated diff", "--no-diff")
+        self.assertIn("## lib/widgets/catalog.py\n\n34 lines.", sections["Files on main"])
+        self.assertIn(["git", "diff", "--name-status", "-M", f"{SHAS['merge_base']}...{SHAS['head']}"], ctx.shell.calls)
+        self.assertIn("5 files changed", sections["Header"])
+
+    def test_no_diff_and_no_main_files_take_no_diff_at_all(self):
+        text, sections, term, ctx = self.run_without(no_diff=True, no_main_files=True)
+        self.check_left_out(sections, "Annotated diff", "--no-diff")
+        self.check_left_out(sections, "Files on main", "--no-main-files")
+        self.assertFalse(any(c[:2] == ["git", "diff"] for c in ctx.shell.calls))
+        self.assertFalse(any(p.endswith("/files") for p in self.gh_paths(ctx)))
+        self.assertEqual(ctx.shell.gh_calls, 16)
+        self.assertNotIn("files changed", sections["Header"])
+        self.assertNotIn("reconcile", sections["Header"])
+        self.assertFalse(any(l.startswith(("diff ", "files ")) for l in term.said))
+
+    def test_plain_diff_uses_or_related_still_take_the_diff(self):
+        head = SHAS["head"]
+        for extra in ({"plain_diff": True}, {"uses": True}, {"related": True}):
+            sh = fixture_shell(self.root)
+            sh.on(["git", *pc.uses_grep_args(["Catalog"]), head], "", "", 1)
+            sh.on([*TestRelatedAndRedact.GREP, head], "", "", 1)
+            code, term, ctx = run_tool(self.root, sh, yes=True, no_diff=True, no_main_files=True, **extra)
+            self.assertEqual(code, 0, term.warned)
+            sections = dict(pc.split_sections((self.root / "pr-data.txt").read_text()))
+            self.assertTrue(any(c[:2] == ["git", "diff"] for c in ctx.shell.calls), extra)
+            self.assertIn("5 files changed", sections["Header"], extra)
+            self.assertNotIn("Annotated diff", sections)
+            self.assertNotIn("Files on main", sections)
+
+    def test_no_commits(self):
+        text, sections, term, ctx = self.run_without(no_commits=True)
+        self.check_left_out(sections, "Commits", "--no-commits")
+        self.assertFalse(any(c[:2] == ["git", "log"] for c in ctx.shell.calls))
+        self.assertIn("- **Counts:** 9 comments, 5 review threads (3 unresolved), 1 failed jobs, 5 files changed\n", sections["Header"])
+
+    def test_no_checks_makes_no_call_for_checks(self):
+        text, sections, term, ctx = self.run_without(no_checks=True)
+        self.check_left_out(sections, "Checks", "--no-checks")
+        self.assertIn("- **Checks:** not collected (--no-checks)\n", sections["Header"])
+        for piece in ("check-runs", "/status", "actions/runs", "deployments", "run view"):
+            self.assertFalse(any(piece in p for p in self.gh_paths(ctx)), piece)
+        self.assertEqual(ctx.shell.gh_calls, 10)
+        self.assertNotIn("failed jobs", sections["Header"])
+        self.assertFalse(any(l.startswith("checks") for l in term.said))
+
+    def test_no_main_files(self):
+        text, sections, term, ctx = self.run_without(no_main_files=True)
+        self.check_left_out(sections, "Files on main", "--no-main-files")
+        self.assertIn("· 6. Checks\n", text)
+        self.assertFalse(any(c[:2] == ["git", "show"] and c[2].startswith(SHAS["merge_base"]) for c in ctx.shell.calls))
+        self.assertFalse(any(l.startswith("files ") for l in term.said))
+
+    def test_all_six_leave_the_header_alone(self):
+        text, sections, term, ctx = self.run_without(
+            no_pull_request=True, no_conversation=True, no_diff=True, no_commits=True, no_checks=True, no_main_files=True)
+        self.assertEqual(list(sections), ["Header"])
+        header = sections["Header"]
+        self.assertIn("- **Sections:** 1. Header\n", header)
+        self.assertIn("- **Checks:** not collected (--no-checks)\n", header)
+        self.assertNotIn("**Counts:**", header)
+        for flag, name in (("--no-pull-request", "Pull request"), ("--no-conversation", "Conversation"), ("--no-diff", "Annotated diff"),
+                           ("--no-commits", "Commits"), ("--no-checks", "Checks"), ("--no-main-files", "Files on main")):
+            self.assertIn(f"  - The {name} section was left out ({flag}).\n", header)
+        self.assertEqual(ctx.shell.gh_calls, 5)  # the version and login checks, the pull request list and record, the user; nothing else
+        self.assertTrue(text.startswith("# pr-data: Header\n"))
+        self.assertEqual(text.count("\n# pr-data: "), 0)
+        self.assertEqual(term.said[-1], "Do not commit pr-data.txt: it holds other people's comments and code.")
 
 
 class TestAnnotatedDiff(unittest.TestCase):
@@ -1561,8 +1697,9 @@ class TestDocumentation(unittest.TestCase):
     def test_readme_and_format_describe_the_tool(self):
         readme = (HERE / "README.md").read_text()
         for piece in ("## Setup", "## Usage", "### Options", "### The ticket number", "pr-data.txt", "PR-DATA-FORMAT.md",
-                      "--yes", "--no-files", "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "Python 3.11"):
+                      "--yes", *TestParseArgs.NO_FLAGS, "--full-logs", "--plain-diff", "--uses", "--related", "--redact", "Python 3.11"):
             self.assertIn(piece, readme, piece)
+        self.assertNotIn("--no-files", readme)
         spec = (HERE / "PR-DATA-FORMAT.md").read_text()
         for name in pc.SECTION_ORDER_ALL:
             self.assertIn(f"# pr-data: {name}", spec)

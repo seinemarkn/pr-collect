@@ -109,7 +109,12 @@ class Options:
     number: int | None = None
     ticket: str | None = None
     yes: bool = False
-    no_files: bool = False
+    no_pull_request: bool = False  # each --no- flag leaves one default section out
+    no_conversation: bool = False
+    no_diff: bool = False
+    no_commits: bool = False
+    no_checks: bool = False
+    no_main_files: bool = False
     full_logs: bool = False
     plain_diff: bool = False
     uses: bool = False
@@ -578,12 +583,15 @@ def render_header(ctx: Context, c: Collected, names: list[str]) -> str:
         ticket_line += f" (number {t.number})"
     ticket_line += f", from {t.source}"
     counts = c.counts
-    count_bits = [f"{counts[k]} {label}" for k, label in [
-        ("comments", "comments"), ("threads", "review threads"), ("commits", "commits"),
-        ("failed_jobs", "failed jobs"), ("files", "files changed"),
-    ] if k in counts]
-    if "unresolved" in counts and "threads" in counts:
-        count_bits[1] = f"{counts['threads']} review threads ({counts['unresolved']} unresolved)"
+    count_bits = []
+    for k, label in [("comments", "comments"), ("threads", "review threads"), ("commits", "commits"),
+                     ("failed_jobs", "failed jobs"), ("files", "files changed")]:
+        if k not in counts:
+            continue  # that part was not collected
+        bit = f"{counts[k]} {label}"
+        if k == "threads" and "unresolved" in counts:
+            bit += f" ({counts['unresolved']} unresolved)"
+        count_bits.append(bit)
     lines = [
         ticket_line,
         f"- **Pull request:** #{pr['number']} [{pr.get('title', '')}]({pr.get('url', '')}) on {c.repo.full_name} ({c.repo.host})",
@@ -714,14 +722,20 @@ def fetch_conversation(ctx: Context, c: Collected) -> None:
     c.comments = gh_api(ctx, c.repo, f"{base}/issues/{c.number}/comments", optional=True) or []
     c.reviews = gh_api(ctx, c.repo, f"{base}/pulls/{c.number}/reviews", optional=True) or []
     c.events = gh_api(ctx, c.repo, f"{base}/issues/{c.number}/timeline", optional=True) or []
-    c.threads = fetch_review_threads(ctx, c)
+    fetch_threads(ctx, c)
     c.counts["comments"] = len(c.comments) + sum(len(t.comments) for t in c.threads)
-    c.counts["threads"] = len(c.threads)
-    c.counts["unresolved"] = sum(1 for t in c.threads if not t.resolved)
     ctx.terminal.say(
         f"conversation        {len(c.comments)} comments, {len(c.reviews)} reviews, "
         f"{len(c.threads)} review threads ({c.counts['unresolved']} unresolved)"
     )
+
+
+def fetch_threads(ctx: Context, c: Collected) -> None:
+    """The review threads alone: part of the conversation, and what the annotated diff
+    places at its lines, so they are fetched for it even when the conversation is left out."""
+    c.threads = fetch_review_threads(ctx, c)
+    c.counts["threads"] = len(c.threads)
+    c.counts["unresolved"] = sum(1 for t in c.threads if not t.resolved)
 
 
 SUGGESTION_RE = re.compile(r"^```suggestion[ \t]*$", re.MULTILINE)
@@ -1775,7 +1789,16 @@ def parse_args(argv: list[str] | None = None) -> Options:
         help="the ticket number (or full key) when the branch name does not carry it",
     )
     parser.add_argument("--yes", action="store_true", help="take the ticket number read from the branch without asking")
-    parser.add_argument("--no-files", action="store_true", help="leave out the section holding the touched files whole")
+    leave_out = parser.add_argument_group(
+        "leaving sections out",
+        "Each flag removes one section the file holds by default; the Header stays and names what was left out.",
+    )
+    leave_out.add_argument("--no-pull-request", action="store_true", help="leave out the Pull request section: the record and the description")
+    leave_out.add_argument("--no-conversation", action="store_true", help="leave out the Conversation section: comments, reviews, and events in time order")
+    leave_out.add_argument("--no-diff", action="store_true", help="leave out the Annotated diff section: the hunks with line numbers and review threads at their lines")
+    leave_out.add_argument("--no-commits", action="store_true", help="leave out the Commits section")
+    leave_out.add_argument("--no-checks", action="store_true", help="leave out the Checks section, and make no call for checks, runs, or logs")
+    leave_out.add_argument("--no-main-files", action="store_true", help="leave out the Files on main section: the touched files whole as they stand on the branch the pull request merges into")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
     parser.add_argument("--plain-diff", action="store_true", help="add the branch diff a second time as git wrote it, for git apply")
     parser.add_argument("--uses", action="store_true", help="add files on the pull request's branch that define a class, constant, method, or factory the diff uses")
@@ -1786,7 +1809,9 @@ def parse_args(argv: list[str] | None = None) -> Options:
     ns = parser.parse_args(argv)
     return Options(
         number=ns.number, ticket=ns.ticket, yes=ns.yes,
-        no_files=ns.no_files, full_logs=ns.full_logs, plain_diff=ns.plain_diff, uses=ns.uses, related=ns.related, redact=list(ns.redact),
+        no_pull_request=ns.no_pull_request, no_conversation=ns.no_conversation, no_diff=ns.no_diff,
+        no_commits=ns.no_commits, no_checks=ns.no_checks, no_main_files=ns.no_main_files,
+        full_logs=ns.full_logs, plain_diff=ns.plain_diff, uses=ns.uses, related=ns.related, redact=list(ns.redact),
     )
 
 
@@ -1809,29 +1834,54 @@ def collect(ctx: Context) -> Path:
     c.taken_by = f"@{me['login']}" if isinstance(me, dict) and me.get("login") else ""
     ctx.terminal.say(f"pull request        #{number}: {pr.get('title', '')}")
     c.options_full_logs = ctx.options.full_logs
+    o = ctx.options
     fetch_refs(ctx, c)
-    fetch_conversation(ctx, c)
-    fetch_commits(ctx, c)
-    fetch_checks(ctx, c)
-    fetch_diff(ctx, c)
-    if ctx.options.no_files:
-        ctx.notes.append("The touched files were left out (--no-files).")
+    # Each --no- flag leaves its section out and skips its fetch, unless a section that
+    # stays needs the same data: the annotated diff places the review threads, and the
+    # git diff lists the files for Files on main, --plain-diff, --uses, and --related.
+    left_out = [(flag, name) for flag, name, out in [
+        ("--no-pull-request", "Pull request", o.no_pull_request),
+        ("--no-conversation", "Conversation", o.no_conversation),
+        ("--no-diff", "Annotated diff", o.no_diff),
+        ("--no-commits", "Commits", o.no_commits),
+        ("--no-checks", "Checks", o.no_checks),
+        ("--no-main-files", main_files_section_name(c), o.no_main_files),
+    ] if out]
+    for flag, name in left_out:
+        ctx.notes.append(f"The {name} section was left out ({flag}).")
+    if not o.no_conversation:
+        fetch_conversation(ctx, c)
+    elif not o.no_diff:
+        fetch_threads(ctx, c)
+        ctx.terminal.say(f"threads             {len(c.threads)} review threads ({c.counts['unresolved']} unresolved), for the annotated diff")
+    if not o.no_commits:
+        fetch_commits(ctx, c)
+    if o.no_checks:
+        c.status_line = "not collected (--no-checks)"
     else:
+        fetch_checks(ctx, c)
+    if not o.no_diff or not o.no_main_files or o.plain_diff or o.uses or o.related:
+        fetch_diff(ctx, c)
+    if not o.no_main_files:
         fetch_files(ctx, c)
-    if ctx.options.uses:
+    if o.uses:
         fetch_uses(ctx, c)
-    if ctx.options.related:
+    if o.related:
         fetch_related(ctx, c)
-    sections = [
-        Section("Pull request", render_pull_request(c)),
-        Section("Conversation", render_conversation(c)),
-        Section("Annotated diff", render_annotated_diff(ctx, c)),
-        Section("Commits", render_commits(c)),
-        Section("Checks", render_checks(c)),
-    ]
-    if ctx.options.plain_diff:
+    sections = []
+    if not o.no_pull_request:
+        sections.append(Section("Pull request", render_pull_request(c)))
+    if not o.no_conversation:
+        sections.append(Section("Conversation", render_conversation(c)))
+    if not o.no_diff:
+        sections.append(Section("Annotated diff", render_annotated_diff(ctx, c)))
+    if not o.no_commits:
+        sections.append(Section("Commits", render_commits(c)))
+    if not o.no_checks:
+        sections.append(Section("Checks", render_checks(c)))
+    if o.plain_diff:
         sections.append(Section("Diff", render_diff(c)))
-    if not ctx.options.no_files:
+    if not o.no_main_files:
         sections.append(Section(main_files_section_name(c), render_main_files(c)))
     if c.uses_files:
         sections.append(Section("Files the diff uses", render_uses(c)))
