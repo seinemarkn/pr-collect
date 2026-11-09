@@ -450,10 +450,9 @@ class Collected:
     options_full_logs: bool = False
     patch: str = ""
     files: list = field(default_factory=list)
-    head_files: dict = field(default_factory=dict)
-    base_files: dict = field(default_factory=dict)
-    added_paths: list = field(default_factory=list)  # added by the pull request: whole in the annotated diff, not repeated
-    removed_paths: list = field(default_factory=list)  # removed by it: likewise
+    base_files: dict = field(default_factory=dict)  # path -> text as it stood at the merge base
+    added_paths: list = field(default_factory=list)  # added by the pull request: not at the merge base; whole in the annotated diff
+    removed_paths: list = field(default_factory=list)  # removed by it: whole in the annotated diff, not repeated
     related_files: dict = field(default_factory=dict)
     uses_names: list = field(default_factory=list)  # the identifiers the diff uses, looked for
     uses_files: dict = field(default_factory=dict)  # path -> text, files at the head defining one of them
@@ -474,14 +473,14 @@ class Section:
 HEADING_PREFIX = "# pr-data: "
 SECTION_ORDER = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Files at head", "Files at base",
+    "Checks", "Files at base",
 ]
-# Every section that can appear, in the order it appears: the eight above, plus "Diff"
+# Every section that can appear, in the order it appears: the seven above, plus "Diff"
 # (--plain-diff) between Checks and the files, then "Files the diff uses" (--uses) and
 # "Related files" (--related) last.
 SECTION_ORDER_ALL = [
     "Header", "Pull request", "Conversation", "Annotated diff", "Commits",
-    "Checks", "Diff", "Files at head", "Files at base", "Files the diff uses", "Related files",
+    "Checks", "Diff", "Files at base", "Files the diff uses", "Related files",
 ]
 
 
@@ -1237,19 +1236,17 @@ def file_at(ctx: Context, sha: str, path: str) -> str | None:
 
 
 def fetch_files(ctx: Context, c: Collected) -> None:
-    """Every touched file whole, except that a file added by the pull request is already
-    whole in the annotated diff at the head, and a removed one at the base; those are
-    named, not repeated."""
+    """Every touched file whole as it stood at the merge base. A file the pull request
+    added was not there; a file it removed is already whole in the annotated diff; both
+    are named, not repeated."""
     for ch in c.files:
         if ch.status == "added":
             c.added_paths.append(ch.path)
-        elif ch.at_head:
-            c.head_files[ch.path] = file_at(ctx, c.head_sha, ch.path)
-        if ch.status == "removed":
+        elif ch.status == "removed":
             c.removed_paths.append(ch.base_path)
-        elif ch.at_base:
+        else:
             c.base_files[ch.base_path] = file_at(ctx, c.merge_base, ch.base_path)
-    line = f"files               {len(c.head_files)} at the head, {len(c.base_files)} at the base"
+    line = f"files               {len(c.base_files)} at the base"
     skipped = [f"{len(c.added_paths)} added" if c.added_paths else "", f"{len(c.removed_paths)} removed" if c.removed_paths else ""]
     if any(skipped):
         line += f"; {' and '.join(x for x in skipped if x)} whole in the annotated diff only"
@@ -1752,7 +1749,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
         help="the ticket number (or full key) when the branch name does not carry it",
     )
     parser.add_argument("--yes", action="store_true", help="take the ticket number read from the branch without asking")
-    parser.add_argument("--no-files", action="store_true", help="leave out the whole touched files at the head and at the base")
+    parser.add_argument("--no-files", action="store_true", help="leave out the section holding the touched files whole")
     parser.add_argument("--full-logs", action="store_true", help="keep every failing step's log whole instead of its last 200 lines")
     parser.add_argument("--plain-diff", action="store_true", help="add the branch diff a second time as git wrote it, for git apply")
     parser.add_argument("--uses", action="store_true", help="add files at the head that define a class, constant, method, or factory the diff uses")
@@ -1809,8 +1806,6 @@ def collect(ctx: Context) -> Path:
     if ctx.options.plain_diff:
         sections.append(Section("Diff", render_diff(c)))
     if not ctx.options.no_files:
-        sections.append(Section("Files at head", render_files(
-            c.head_files, c.head_sha, "at the head", c.added_paths, "added by the pull request")))
         sections.append(Section("Files at base", render_files(
             c.base_files, c.merge_base, "at the base (the merge base)", c.removed_paths, "removed by the pull request")))
     if c.uses_files:

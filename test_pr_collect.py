@@ -1087,24 +1087,18 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("  - The diff reconciles with GitHub's file list: 5 files, +41 -0.", text)
         self.assertNotIn("# pr-data: Diff\n", text)
         self.assertIn("- added, binary: docs/diagram.png\n- renamed (+8 -0): docs/usage.md -> docs/filtering.md\n- modified (+9 -0): lib/widgets/catalog.py", self.section(text, "Annotated diff"))
-        head = self.section(text, "Files at head")
-        self.assertIn("Not repeated here, added by the pull request; the Annotated diff section holds each whole: docs/diagram.png, lib/widgets/filter.py.\n\n"
-                      f"Every other touched file whole at the head, at {SHAS['head']}.", head)
-        self.assertNotIn("## docs/diagram.png", head)
-        self.assertNotIn("## lib/widgets/filter.py", head)
-        self.assertIn("## docs/filtering.md\n\n", head)
-        self.assertIn("## lib/widgets/catalog.py\n\n", head)
-        self.assertIn("## tests/test_catalog.py\n\n", head)
-        self.assertNotIn("## docs/usage.md", head)
+        self.assertNotIn("# pr-data: Files at head", text)
         base = self.section(text, "Files at base")
         self.assertTrue(base.startswith(f"\nEvery touched file whole at the base (the merge base), at {SHAS['merge_base']}."), base[:120])
         self.assertIn("## docs/usage.md\n\n13 lines.", base)
+        self.assertNotIn("## docs/filtering.md", base)
         self.assertNotIn("## lib/widgets/filter.py", base)
         self.assertNotIn("## docs/diagram.png", base)
-        self.assertIn("## lib/widgets/catalog.py", base)
+        self.assertIn("## lib/widgets/catalog.py\n\n34 lines.", base)
+        self.assertIn("## tests/test_catalog.py\n\n21 lines.", base)
         self.assertTrue(any(l.startswith("diff                5 files, +41 -0") for l in term.said))
-        self.assertIn("files               3 at the head, 3 at the base; 2 added whole in the annotated diff only", term.said)
-        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files at head · 8. Files at base", text)
+        self.assertIn("files               3 at the base; 2 added whole in the annotated diff only", term.said)
+        self.assertIn("- **Sections:** 1. Header · 2. Pull request · 3. Conversation · 4. Annotated diff · 5. Commits · 6. Checks · 7. Files at base", text)
 
     def test_plain_diff_flag(self):
         code, term, ctx = run_tool(self.root, yes=True, plain_diff=True)
@@ -1115,13 +1109,13 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("````diff\ndiff --git a/docs/diagram.png", diff)
         self.assertIn("+    return chosen\n", diff)
         self.assertIn("     unittest.main()\n````", diff)
-        self.assertIn("· 6. Checks · 7. Diff · 8. Files at head · 9. Files at base", text)
+        self.assertIn("· 6. Checks · 7. Diff · 8. Files at base", text)
         self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:-2])
 
     def test_fenced_markdown_inside_markdown_survives(self):
         code, term, ctx = run_tool(self.root, yes=True)
-        head = self.section((self.root / "pr-data.txt").read_text(), "Files at head")
-        part = head.split("## docs/filtering.md", 1)[1].split("\n## lib/widgets/catalog.py", 1)[0]
+        base = self.section((self.root / "pr-data.txt").read_text(), "Files at base")
+        part = base.split("## docs/usage.md", 1)[1].split("\n## lib/widgets/catalog.py", 1)[0]
         self.assertIn("\n````\n# Using the catalog", part)
         self.assertTrue(part.rstrip().endswith("````"))
 
@@ -1129,7 +1123,7 @@ class TestDiffAndFiles(unittest.TestCase):
         code, term, ctx = run_tool(self.root, yes=True, no_files=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
-        self.assertNotIn("# pr-data: Files at head", text)
+        self.assertNotIn("# pr-data: Files at base", text)
         self.assertIn("The touched files were left out (--no-files).", text)
         self.assertIn("· 6. Checks\n", text)
 
@@ -1153,12 +1147,12 @@ class TestDiffAndFiles(unittest.TestCase):
         self.assertIn("HTTP 502", ctx.missing[0])
 
     def test_unreadable_file_and_empty_diff(self):
-        sh = fixture_shell(self.root).on(["git", "show", f"{SHAS['head']}:lib/widgets/catalog.py"], "", "fatal: path not in tree", 128)
+        sh = fixture_shell(self.root).on(["git", "show", f"{SHAS['merge_base']}:lib/widgets/catalog.py"], "", "fatal: path not in tree", 128)
         code, term, ctx = run_tool(self.root, sh, yes=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         self.assertIn("## lib/widgets/catalog.py\n\n(not readable; see the header)", text)
-        self.assertIn(f"lib/widgets/catalog.py at {SHAS['head'][:10]}: fatal: path not in tree", text)
+        self.assertIn(f"lib/widgets/catalog.py at {SHAS['merge_base'][:10]}: fatal: path not in tree", text)
         c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="m", head_sha="h")
         self.assertTrue(pc.render_diff(c).startswith("`git diff m...h`, 0 lines, as git wrote it"))
         self.assertTrue(pc.render_diff(c).endswith("\n\n(empty)\n"))
@@ -1172,13 +1166,13 @@ class TestDiffAndFiles(unittest.TestCase):
     def test_removed_files_are_not_repeated_at_the_base(self):
         c = pc.Collected(pc.Repo("h", "o", "n", self.root), "b", pc.Ticket(1), 1, {}, FIXED_TIME, merge_base="mb", head_sha="hd")
         c.files = [pc.FileChange("added", "new.py"), pc.FileChange("removed", "gone.py"), pc.FileChange("renamed", "b.py", "a.py")]
-        sh = FakeShell().on(["git", "show", "hd:b.py"], "head b\n").on(["git", "show", "mb:a.py"], "base a\n")
+        sh = FakeShell().on(["git", "show", "mb:a.py"], "base a\n")
         term = FakeTerminal()
         pc.fetch_files(pc.Context(sh, term, pc.Options()), c)
-        self.assertEqual(len(sh.calls), 2)
+        self.assertEqual(sh.calls, [["git", "show", "mb:a.py"]])
         self.assertEqual((c.added_paths, c.removed_paths), (["new.py"], ["gone.py"]))
         self.assertEqual(c.head_paths, {"new.py", "b.py"})
-        self.assertEqual(term.said, ["files               1 at the head, 1 at the base; 1 added and 1 removed whole in the annotated diff only"])
+        self.assertEqual(term.said, ["files               1 at the base; 1 added and 1 removed whole in the annotated diff only"])
         text = pc.render_files(c.base_files, "mb", "at the base", c.removed_paths, "removed by the pull request")
         self.assertIn("holds each whole: gone.py.\n\nEvery other touched file whole at the base, at mb.\n\n## a.py\n\n1 lines.", text)
         self.assertEqual(pc.change_label(pc.FileChange("modified", "a.py", None, 3, None)), "modified (+3 -0): a.py")
@@ -1302,13 +1296,13 @@ class TestTheFile(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_eight_sections_in_order_and_split_back(self):
+    def test_seven_sections_in_order_and_split_back(self):
         code, term, ctx = run_tool(self.root, yes=True)
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         names = [n for n, _ in pc.split_sections(text)]
         self.assertEqual(names, pc.SECTION_ORDER)
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 7)
         self.assertEqual([n for n in pc.SECTION_ORDER_ALL if n in pc.SECTION_ORDER], pc.SECTION_ORDER)
         self.assertEqual(pc.split_sections("no heading\n"), [])
         self.assertEqual(pc.split_sections("# pr-data: A\n\nx\n# pr-data: B\n"), [("A", "\nx"), ("B", "")])
@@ -1365,7 +1359,7 @@ class TestRelatedAndRedact(unittest.TestCase):
         self.assertIn("## README.md", text)
         self.assertNotIn("## lib/widgets/catalog.py\n\n1 lines", text)
         self.assertIn("Related files (--related): 7 identifiers (filtered, colours, MAX_SIZE, filter_widgets, test_filtered_by_colour, test_filtered_by_size, test_colours); 2 files name one of them.", text)
-        self.assertIn("· 9. Related files", text)
+        self.assertIn("· 8. Related files", text)
         self.assertTrue(any(l.startswith("related             2 files") for l in term.said))
 
     def test_related_cap_grep_failure_and_no_identifiers(self):
@@ -1481,7 +1475,7 @@ class TestUses(unittest.TestCase):
         self.assertTrue(sec.startswith(f"\nFiles at the head, at {head}, that define what the diff uses: a class, a constant, a method, a factory named on an added line. Looked for the definitions of 1 identifiers.\n\n## docs/notes.md\n\nDefines: Catalog.\n\n1 lines.\n\n```\nCatalog = the list\n```\n\n\n## lib/widgets/legacy.py\n\nDefines: Catalog.\n\n2 lines."), sec[:400])
         self.assertNotIn("## lib/widgets/catalog.py\n\nDefines", text)
         self.assertIn("Files the diff uses (--uses): looked for the definitions of 1 identifiers; 2 files define one of them.", text)
-        self.assertIn("· 8. Files at base · 9. Files the diff uses\n", text)
+        self.assertIn("· 7. Files at base · 8. Files the diff uses\n", text)
         self.assertIn("uses                2 files at the head", term.said)
         self.assertEqual(ctx.shell.gh_calls, 17)
 
@@ -1495,7 +1489,7 @@ class TestUses(unittest.TestCase):
         self.assertEqual(code, 0, term.warned)
         text = (self.root / "pr-data.txt").read_text()
         self.assertEqual([n for n, _ in pc.split_sections(text)], pc.SECTION_ORDER_ALL[:6] + pc.SECTION_ORDER_ALL[7:])
-        self.assertIn("· 9. Files the diff uses · 10. Related files", text)
+        self.assertIn("· 8. Files the diff uses · 9. Related files", text)
 
     def test_cap_grep_failure_no_match_and_no_identifiers(self):
         head = SHAS["head"]

@@ -12,3 +12,6 @@ htmlcov/
 # Editor and tooling folders — nothing hidden belongs in the repository except .github
 .*/
 !.github/
+
+# Workspace shell session records, never part of the tool
+.studio/
